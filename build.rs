@@ -65,7 +65,9 @@ fn exclude_backend_dependencies(source: &Path) {
     }
     if filtered != input {
         fs::write(pkg, filtered).expect("write FFI-only OSR .pkg manifest");
-        println!("cargo:warning=Using routing-only OSR dependency manifest, with pinned date-tz and without net/LibreSSL");
+        println!(
+            "cargo:warning=Using routing-only OSR dependency manifest, with pinned date-tz and without net/LibreSSL"
+        );
     }
 }
 
@@ -244,7 +246,9 @@ set_target_properties(catenary_osr_bridge PROPERTIES
         (1..=64).contains(&parsed_jobs),
         "OSR_BUILD_JOBS must be between 1 and 64"
     );
-    println!("cargo:warning=Building OSR with {parsed_jobs} native jobs (-O0 -g0 in Debug)");
+    println!(
+        "cargo:warning=Building OSR with {parsed_jobs} native jobs (-O0 -g0 in Debug)"
+    );
     config.env("CMAKE_BUILD_PARALLEL_LEVEL", &native_jobs);
 
     // OSR's .pkg pins git@github.com dependencies. CI must clone over HTTPS.
