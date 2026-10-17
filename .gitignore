@@ -1,1 +1,5 @@
 /target
+/build
+/vendor/osr/deps
+/vendor/osr/build
+.DS_Store

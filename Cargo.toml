@@ -2,5 +2,13 @@
 name = "osr-ffi"
 version = "0.1.0"
 edition = "2024"
+description = "Safe Rust bindings to MOTIS Open Street Router using cxx"
+license = "MIT"
+links = "catenary_osr_bridge"
 
 [dependencies]
+cxx = "1"
+
+[build-dependencies]
+cmake = "0.1"
+cxx-build = "1"
