@@ -7,7 +7,14 @@ R-tree and elevation data remain owned and memory-mapped by C++.
 ## Build
 
 Requirements: a C++23 toolchain, CMake, Git, a working linker and OSR's
-native `pkg` build dependencies. For a reproducible production build, pass
+native `pkg` build dependencies.
+
+Native dependencies are compiled from source. This can take substantial time on a
+first build, especially on laptops. By default the bridge uses two native build
+jobs and disables bulky debug symbols for OSR's C/C++ dependencies. You can set
+`OSR_BUILD_JOBS=1` on memory-constrained machines, or increase it when RAM
+allows. Repeated builds reuse the Cargo/CMake output and fetched dependencies.
+ For a reproducible production build, pass
 a known revision via `OSR_SOURCE_DIR` or `OSR_REV`.
 
 ```sh
@@ -24,7 +31,7 @@ a source revision. The build checks the cached checkout's current HEAD
 against the requested revision, and refetches when the revision changes.
 `OSR_SOURCE_DIR` points to an externally managed checkout. Its source files are staged under Cargo's `OUT_DIR` before filtering `[net]`, so the original checkout is never modified. The build compiles OSR with its own top-level CMake
 project and injects a native shared bridge target, without editing OSR files.
-Dependencies are fetched through OSR's pinned `.pkg` configuration. The build excludes the root `[net]` dependency because routing does not link OSR's HTTP backend; this avoids LibreSSL's broken OpenBSD submodule.
+Dependencies are fetched through OSR's pinned `.pkg` configuration. The build excludes the root `[net]` dependency because routing does not link OSR's HTTP backend; this avoids LibreSSL's broken OpenBSD submodule. OSR's root `.pkg` omits a required `date` declaration even though its `.pkg.lock` pins it. The FFI build adds that pinned `motis-project/date` dependency so `date-tz`, `date/tz.h` and `date/iso_week.h` are available.
 
 On Linux, the generated `libcatenary_osr_bridge.so` is under Cargo's
 build `OUT_DIR/native-lib`. Deploy the shared library with consuming
