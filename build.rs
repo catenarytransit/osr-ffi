@@ -24,7 +24,7 @@ fn resolve_source(out: &Path) -> PathBuf {
     const UPSTREAM: &str = "https://github.com/motis-project/osr.git";
     const PINNED: &str = "d53c174408a859f29be7bd5cfbf176cf9649cd06";
     let url = env::var("OSR_GIT_URL").unwrap_or_else(|_| UPSTREAM.into());
-    let revision = env::var("OSR_REV").unwrap_or_else(|_| PINN.into());
+    let revision = env::var("OSR_REV").unwrap_or_else(|_| PINNED.into());
     let path = out.join("osr-source");
 
     if !path.join(".git").exists() {
