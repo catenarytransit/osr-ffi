@@ -9,7 +9,6 @@ fn run_command(cmd: &mut Command, what: &str) {
     assert!(status.success(), "{what} failed with {status}");
 }
 
-
 /// Copy a user-provided OSR checkout into OUT_DIR before removing backend-only
 /// dependencies. Never edit the caller's checked-out source tree.
 fn stage_external_source(source: &Path, target: &Path) {
@@ -54,9 +53,19 @@ fn exclude_backend_dependencies(source: &Path) {
             filtered.push_str(line);
         }
     }
+    // The upstream OSR lockfile already pins this dependency, but its root
+    // .pkg does not list it. Without the date-tz target, both date/tz.h
+    // and date/iso_week.h are missing when OSR's library is compiled.
+    const DATE_DEP: &str = "[date]\n  url=git@github.com:motis-project/date.git\n  branch=master\n  commit=ce88cc33b5551f66655614eeebb7c5b7189025fb\n";
+    if !filtered.contains("[date]") {
+        if !filtered.ends_with('\n') {
+            filtered.push('\n');
+        }
+        filtered.push_str(DATE_DEP);
+    }
     if filtered != input {
         fs::write(pkg, filtered).expect("write FFI-only OSR .pkg manifest");
-        println!("cargo:warning=Omitting unused OSR [net] dependency (LibreSSL) from the FFI build");
+        println!("cargo:warning=Using routing-only OSR dependency manifest, with pinned date-tz and without net/LibreSSL");
     }
 }
 
@@ -64,10 +73,14 @@ fn resolve_source(out: &Path) -> PathBuf {
     if let Some(dir) = env::var_os("OSR_SOURCE_DIR") {
         let path = fs::canonicalize(&dir).expect("canonicalize OSR_SOURCE_DIR");
         assert!(
-            path.join("CMakeLists.txt").is_file() && path.join("include/osr/routing/route.h").is_file(),
+            path.join("CMakeLists.txt").is_file()
+                && path.join("include/osr/routing/route.h").is_file(),
             "OSR_SOURCE_DIR must point to the root of a MOTIS OSR checkout"
         );
-        println!("cargo:rerun-if-changed={}", path.join("CMakeLists.txt").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            path.join("CMakeLists.txt").display()
+        );
         println!("cargo:rerun-if-changed={}", path.join(".pkg").display());
         let staged = out.join("osr-source");
         stage_external_source(&path, &staged);
@@ -91,35 +104,63 @@ fn resolve_source(out: &Path) -> PathBuf {
             "initialize OSR source",
         );
         run_command(
-            Command::new("git").arg("-C").arg(&path)
-                .arg("remote").arg("add").arg("origin").arg(&url),
+            Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .arg("remote")
+                .arg("add")
+                .arg("origin")
+                .arg(&url),
             "set OSR origin",
         );
     }
 
     // This also repairs an interrupted clone or an OSR_REV change.
     run_command(
-        Command::new("git").arg("-C").arg(&path)
-            .arg("remote").arg("set-url").arg("origin").arg(&url),
+        Command::new("git")
+            .arg("-C")
+            .arg(&path)
+            .arg("remote")
+            .arg("set-url")
+            .arg("origin")
+            .arg(&url),
         "update OSR origin",
     );
-    let actual = Command::new("git").arg("-C").arg(&path)
-        .args(["rev-parse", "HEAD"]).output();
-    let at_requested_revision = actual.ok().filter(|o| o.status.success())
+    let actual = Command::new("git")
+        .arg("-C")
+        .arg(&path)
+        .args(["rev-parse", "HEAD"])
+        .output();
+    let at_requested_revision = actual
+        .ok()
+        .filter(|o| o.status.success())
         .is_some_and(|o| String::from_utf8_lossy(&o.stdout).trim() == revision);
     if !at_requested_revision {
         run_command(
-            Command::new("git").arg("-C").arg(&path)
-                .arg("fetch").arg("--depth=1").arg("origin").arg(&revision),
+            Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .arg("fetch")
+                .arg("--depth=1")
+                .arg("origin")
+                .arg(&revision),
             "fetch pinned OSR source",
         );
         run_command(
-            Command::new("git").arg("-C").arg(&path)
-                .arg("checkout").arg("--force").arg("--detach").arg("FETCH_HEAD"),
+            Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .arg("checkout")
+                .arg("--force")
+                .arg("--detach")
+                .arg("FETCH_HEAD"),
             "checkout pinned OSR source",
         );
     }
-    assert!(path.join("CMakeLists.txt").is_file(), "OSR checkout missing CMakeLists.txt");
+    assert!(
+        path.join("CMakeLists.txt").is_file(),
+        "OSR checkout missing CMakeLists.txt"
+    );
     exclude_backend_dependencies(&path);
     path
 }
@@ -132,6 +173,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OSR_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=OSR_GIT_URL");
     println!("cargo:rerun-if-env-changed=OSR_REV");
+    println!("cargo:rerun-if-env-changed=OSR_BUILD_JOBS");
 
     // Generate the header before CMake compiles router.cc.
     let mut bridge = cxx_build::bridge("src/lib.rs");
@@ -152,12 +194,18 @@ fn main() {
     // until after OSR's CMakeLists.txt defines `osr`.
     // Raw string with REAL newlines. CMake cannot parse backslash-n text.
     // The guard prevents OSR's dependency projects from registering the hook.
-    fs::write(&project, r#"
+    fs::write(
+        &project,
+        r#"
 if(PROJECT_NAME STREQUAL "osr" AND CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
   cmake_language(DEFER CALL include "${OSR_FFI_LATE_INCLUDE}")
 endif()
-"#).expect("write CMAKE_PROJECT_INCLUDE hook");
-    fs::write(&deferred, r#"
+"#,
+    )
+    .expect("write CMAKE_PROJECT_INCLUDE hook");
+    fs::write(
+        &deferred,
+        r#"
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
     "${OSR_FFI_ROOT}"
@@ -167,7 +215,9 @@ target_compile_features(catenary_osr_bridge PRIVATE cxx_std_23)
 set_target_properties(catenary_osr_bridge PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}")
-"#).expect("late cmake include");
+"#,
+    )
+    .expect("late cmake include");
 
     let mut config = cmake::Config::new(&source);
     config
@@ -180,7 +230,22 @@ set_target_properties(catenary_osr_bridge PROPERTIES
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("OSR_MIMALLOC", "OFF")
-        .define("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
+        .define("CMAKE_EXPORT_COMPILE_COMMANDS", "ON")
+        .define("CMAKE_CXX_FLAGS_DEBUG", "-O0 -g0")
+        .define("CMAKE_C_FLAGS_DEBUG", "-O0 -g0");
+
+    // Large C++23 templates can exhaust RAM under unbounded Make/CMake -j.
+    // Default to two native workers; callers may tune OSR_BUILD_JOBS.
+    let native_jobs = env::var("OSR_BUILD_JOBS").unwrap_or_else(|_| "2".to_owned());
+    let parsed_jobs = native_jobs
+        .parse::<usize>()
+        .expect("OSR_BUILD_JOBS must be a positive integer");
+    assert!(
+        (1..=64).contains(&parsed_jobs),
+        "OSR_BUILD_JOBS must be between 1 and 64"
+    );
+    println!("cargo:warning=Building OSR with {parsed_jobs} native jobs (-O0 -g0 in Debug)");
+    config.env("CMAKE_BUILD_PARALLEL_LEVEL", &native_jobs);
 
     // OSR's .pkg pins git@github.com dependencies. CI must clone over HTTPS.
     // CMake's pkg download and source dependency fetch run as subprocesses.
