@@ -266,13 +266,16 @@ rust::Vec<SnapCandidate> Router::snap(
     throw std::invalid_argument("positive matching radius required");
   }
   auto const location = to_location(point);
-  auto const matches =
-      expand_search
-          ? impl_->lookup_.get_raw_match(location, radius)
-          : impl_->lookup_.get_raw_way_candidates(location, radius);
+  // get_raw_way_candidates is private in OSR's public lookup API.
+  // get_raw_match is the supported public method; strict-radius mode
+  // filters its expanded candidates without relying on private internals.
+  auto const matches = impl_->lookup_.get_raw_match(location, radius);
   auto out = rust::Vec<SnapCandidate>{};
   out.reserve(matches.size());
   for (auto const& m : matches) {
+    if (!expand_search && m.dist_to_way_ >= radius) {
+      continue;
+    }
     SnapCandidate c{};
     if (auto id = impl_->ways_.get_osm_way(m.way_)) {
       c.osm_way_id = *id;
