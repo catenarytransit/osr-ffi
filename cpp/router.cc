@@ -116,8 +116,8 @@ RouteResult to_result(osr::ways const& w,
   output.duration_seconds = path->duration_.count();
   output.distance_meters = path->dist_;
   output.uses_elevator = path->uses_elevator_;
-  output.elevation_up = osr::to_idx(path->elevation_.up_);
-  output.elevation_down = osr::to_idx(path->elevation_.down_);
+  output.elevation_up = cista::to_idx(path->elevation_.up_);
+  output.elevation_down = cista::to_idx(path->elevation_.down_);
 
   if (with_segments) {
     output.segments.reserve(path->segments_.size());
@@ -126,13 +126,13 @@ RouteResult to_result(osr::ways const& w,
       segment.cost = s.cost_;
       segment.duration_seconds = s.duration_.count();
       segment.distance_meters = s.dist_;
-      segment.from_node = osr::to_idx(s.from_);
-      segment.to_node = osr::to_idx(s.to_);
+      segment.from_node = cista::to_idx(s.from_);
+      segment.to_node = cista::to_idx(s.to_);
       segment.mode = static_cast<std::uint8_t>(s.mode_);
       segment.from_level = s.from_level_.to_float();
       segment.to_level = s.to_level_.to_float();
-      segment.elevation_up = osr::to_idx(s.elevation_.up_);
-      segment.elevation_down = osr::to_idx(s.elevation_.down_);
+      segment.elevation_up = cista::to_idx(s.elevation_.up_);
+      segment.elevation_down = cista::to_idx(s.elevation_.down_);
       if (auto id = w.get_osm_way(s.way_); id.has_value()) {
         segment.has_osm_way_id = true;
         segment.osm_way_id = *id;
