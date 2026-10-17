@@ -81,7 +81,7 @@ fn main() {
     // OSR must remain the top-level CMake project: it initializes its own
     // pinned pkg dependencies from cmake/pkg.cmake. Defer the extra target
     // until after OSR's CMakeLists.txt defines `osr`.
-    fs::write(&project, "cmake_language(DEFER CALL include ${OSR_FFI_LATE_INCLUDE})\n")
+    fs::write(&project, "if(PROJECT_NAME STREQUAL osr AND CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)\\n  cmake_language(DEFER CALL include ${OSR_FFI_LATE_INCLUDE})\\nendif()\\n")
         .expect("project include");
     fs::write(&deferred, r#"
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")

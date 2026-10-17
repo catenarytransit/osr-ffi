@@ -88,7 +88,6 @@ std::optional<osr::routing_time_t> get_start_time(RoutingOptions const& o) {
 
 void validate_options(RoutingOptions const& o) {
   (void)get_profile(o.profile);
-  (void)get_algorithm(o.algorithm);
   (void)get_direction(o.direction);
   if (o.max_cost == 0U || !std::isfinite(o.max_match_distance_meters) ||
       o.max_match_distance_meters <= 0.0) {

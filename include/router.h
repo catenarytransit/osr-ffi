@@ -33,7 +33,6 @@ public:
   rust::Vec<SnapCandidate> snap(
       Coordinate const&, double, bool) const;
 
-  MapMatchResult map_match(Coordinate const* = nullptr) const = delete;
   MapMatchResult map_match(
       rust::Slice<Coordinate const>, std::uint8_t, float,
       rust::Slice<std::int64_t const>) const;

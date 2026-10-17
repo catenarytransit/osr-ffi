@@ -169,6 +169,7 @@ pub enum Profile {
 pub enum Algorithm {
     Dijkstra = 0,
     BidirectionalAStar = 1,
+    AStar = 2,
 }
 
 #[repr(u8)]

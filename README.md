@@ -86,9 +86,9 @@ fn example() -> Result<(), Box<dyn std::error::Error>> {
   Bike/car sharing require OSR mobility overlays, which this initial
   read-only bridge does **not** construct; these profiles should only
   be considered usable after their overlay prerequisites are integrated.
-- **One-to-one**: native Dijkstra or OSR bidirectional A*/fallback, forward
+- **One-to-one**: native Dijkstra, direct A*, or OSR bidirectional A*/fallback, forward
   or backward direction, cost cutoff, matching radius, indoor level,
-  custom walking speed, optional Unix start time (Dijkstra only), and
+  custom walking speed, optional Unix start time (Dijkstra or direct A*), and
   OSM-node blocklist. Individual path segments preserve mode, geometry,
   cost, duration, distance, OSM way ID and elevation change.
 - **One-to-many**: one native Dijkstra execution, not repeated individual
