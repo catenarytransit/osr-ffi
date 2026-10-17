@@ -10,48 +10,61 @@ fn run_command(cmd: &mut Command, what: &str) {
 }
 
 fn resolve_source(out: &Path) -> PathBuf {
-    if let Some(path) = env::var_os("OSR_SOURCE_DIR") {
-        let path = PathBuf::from(path);
-        assert!(path.join("CMakeLists.txt").exists(), "OSR_SOURCE_DIR must point at the OSR source root");
-        return fs::canonicalize(path).expect("canonicalize OSR_SOURCE_DIR");
-    }
-    let path = out.join("osr-source");
-    if path.join("CMakeLists.txt").exists() {
+    if let Some(dir) = env::var_os("OSR_SOURCE_DIR") {
+        let path = fs::canonicalize(&dir).expect("canonicalize OSR_SOURCE_DIR");
+        assert!(
+            path.join("CMakeLists.txt").is_file() && path.join("include/osr/routing/route.h").is_file(),
+            "OSR_SOURCE_DIR must point to the root of a MOTIS OSR checkout"
+        );
+        println!("cargo:rerun-if-changed={}", path.join("CMakeLists.txt").display());
         return path;
     }
-    let primary = env::var("OSR_GIT_URL")
-        .unwrap_or_else(|_| "https://github.com/catenarytransit/osr.git".into());
-    let fallback = "https://github.com/motis-project/osr.git";
-    let clone = |url: &str| Command::new("git")
-        .arg("clone").arg("--depth=1").arg("--").arg(url).arg(&path)
-        .status().is_ok_and(|s| s.success());
-    if !clone(&primary) {
-        let _ = fs::remove_dir_all(&path);
-        println!("cargo:warning=Could not clone Catenary OSR fork {primary}; using pinned upstream fallback");
-        assert!(clone(fallback), "could not clone Catenary fork or upstream OSR");
+
+    // Keep the import deterministic: never silently build the tip of master.
+    const UPSTREAM: &str = "https://github.com/motis-project/osr.git";
+    const PINNED: &str = "d53c174408a859f29be7bd5cfbf176cf9649cd06";
+    let url = env::var("OSR_GIT_URL").unwrap_or_else(|_| UPSTREAM.into());
+    let revision = env::var("OSR_REV").unwrap_or_else(|_| PINN.into());
+    let path = out.join("osr-source");
+
+    if !path.join(".git").exists() {
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove incomplete OSR checkout");
+        }
         run_command(
-            Command::new("git").arg("-C").arg(&path).arg("fetch")
-                .arg("--depth=1").arg("origin")
-                .arg("d53c174408a859f29be7bd5cfbf176cf9649cd06"),
-            "fetch pinned upstream OSR commit",
+            Command::new("git").arg("init").arg(&path),
+            "initialize OSR source",
         );
         run_command(
-            Command::new("git").arg("-C").arg(&path).arg("checkout")
-                .arg("--detach").arg("d53c174408a859f29be7bd5cfbf176cf9649cd06"),
-            "checkout pinned upstream OSR commit",
-        );
-    } else if let Ok(rev) = env::var("OSR_REV") {
-        run_command(
-            Command::new("git").arg("-C").arg(&path).arg("fetch")
-                .arg("--depth=1").arg("origin").arg(&rev),
-            "fetch requested Catenary OSR revision",
-        );
-        run_command(
-            Command::new("git").arg("-C").arg(&path).arg("checkout")
-                .arg("--detach").arg(&rev),
-            "checkout requested Catenary OSR revision",
+            Command::new("git").arg("-C").arg(&path)
+                .arg("remote").arg("add").arg("origin").arg(&url),
+            "set OSR origin",
         );
     }
+
+    // This also repairs an interrupted clone or an OSR_REV change.
+    run_command(
+        Command::new("git").arg("-C").arg(&path)
+            .arg("remote").arg("set-url").arg("origin").arg(&url),
+        "update OSR origin",
+    );
+    let actual = Command::new("git").arg("-C").arg(&path)
+        .args(["rev-parse", "HEAD"]).output();
+    let at_requested_revision = actual.ok().filter(|o| o.status.success())
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).trim() == revision);
+    if !at_requested_revision {
+        run_command(
+            Command::new("git").arg("-C").arg(&path)
+                .arg("fetch").arg("--depth=1").arg("origin").arg(&revision),
+            "fetch pinned OSR source",
+        );
+        run_command(
+            Command::new("git").arg("-C").arg(&path)
+                .arg("checkout").arg("--detach").arg("FETCH_HEAD"),
+            "checkout pinned OSR source",
+        );
+    }
+    assert!(path.join("CMakeLists.txt").is_file(), "OSR checkout missing CMakeLists.txt");
     path
 }
 
@@ -81,8 +94,13 @@ fn main() {
     // OSR must remain the top-level CMake project: it initializes its own
     // pinned pkg dependencies from cmake/pkg.cmake. Defer the extra target
     // until after OSR's CMakeLists.txt defines `osr`.
-    fs::write(&project, "if(PROJECT_NAME STREQUAL osr AND CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)\\n  cmake_language(DEFER CALL include ${OSR_FFI_LATE_INCLUDE})\\nendif()\\n")
-        .expect("project include");
+    // Raw string with REAL newlines. CMake cannot parse backslash-n text.
+    // The guard prevents OSR's dependency projects from registering the hook.
+    fs::write(&project, r#"
+if(PROJECT_NAME STREQUAL "osr" AND CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+  cmake_language(DEFER CALL include "${OSR_FFI_LATE_INCLUDE}")
+endif()
+"#).expect("write CMAKE_PROJECT_INCLUDE hook");
     fs::write(&deferred, r#"
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
@@ -105,9 +123,11 @@ set_target_properties(catenary_osr_bridge PROPERTIES
         .define("OSR_FFI_LIB_DIR", &lib_dir)
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
-        .define("OSR_MIMALLOC", "OFF");
+        .define("OSR_MIMALLOC", "OFF")
+        .define("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
-    // OSR's .pkg pins git@github.com deps; allow unattended HTTPS builds.
+    // OSR's .pkg pins git@github.com dependencies. CI must clone over HTTPS.
+    // CMake's pkg download and source dependency fetch run as subprocesses.
     config
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf")
