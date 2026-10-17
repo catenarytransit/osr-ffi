@@ -9,6 +9,57 @@ fn run_command(cmd: &mut Command, what: &str) {
     assert!(status.success(), "{what} failed with {status}");
 }
 
+
+/// Copy a user-provided OSR checkout into OUT_DIR before removing backend-only
+/// dependencies. Never edit the caller's checked-out source tree.
+fn stage_external_source(source: &Path, target: &Path) {
+    if target.exists() {
+        fs::remove_dir_all(target).expect("remove previous staged OSR checkout");
+    }
+    fn copy_tree(source: &Path, target: &Path) {
+        fs::create_dir_all(target).expect("create staged OSR directory");
+        for entry in fs::read_dir(source).expect("read OSR source directory") {
+            let entry = entry.expect("read OSR source entry");
+            let name = entry.file_name();
+            if matches!(name.to_str(), Some(".git" | "deps" | "build" | "target")) {
+                continue;
+            }
+            let src = entry.path();
+            let dst = target.join(name);
+            if entry.file_type().expect("OSR source file type").is_dir() {
+                copy_tree(&src, &dst);
+            } else {
+                fs::copy(&src, &dst).expect("copy staged OSR source file");
+            }
+        }
+    }
+    copy_tree(source, target);
+}
+
+/// OSR's CMakeLists unconditionally defines backend and test executables, but
+/// Cargo only builds the routing library and its bridge. The [net] entry pulls
+/// in LibreSSL (and a broken OpenBSD submodule), even though the router target
+/// does not link to net or web-server.
+fn exclude_backend_dependencies(source: &Path) {
+    let pkg = source.join(".pkg");
+    let input = fs::read_to_string(&pkg).expect("read pinned OSR .pkg manifest");
+    let mut filtered = String::with_capacity(input.len());
+    let mut skip = false;
+    for line in input.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            skip = trimmed == "[net]";
+        }
+        if !skip {
+            filtered.push_str(line);
+        }
+    }
+    if filtered != input {
+        fs::write(pkg, filtered).expect("write FFI-only OSR .pkg manifest");
+        println!("cargo:warning=Omitting unused OSR [net] dependency (LibreSSL) from the FFI build");
+    }
+}
+
 fn resolve_source(out: &Path) -> PathBuf {
     if let Some(dir) = env::var_os("OSR_SOURCE_DIR") {
         let path = fs::canonicalize(&dir).expect("canonicalize OSR_SOURCE_DIR");
@@ -17,7 +68,11 @@ fn resolve_source(out: &Path) -> PathBuf {
             "OSR_SOURCE_DIR must point to the root of a MOTIS OSR checkout"
         );
         println!("cargo:rerun-if-changed={}", path.join("CMakeLists.txt").display());
-        return path;
+        println!("cargo:rerun-if-changed={}", path.join(".pkg").display());
+        let staged = out.join("osr-source");
+        stage_external_source(&path, &staged);
+        exclude_backend_dependencies(&staged);
+        return staged;
     }
 
     // Keep the import deterministic: never silently build the tip of master.
@@ -60,11 +115,12 @@ fn resolve_source(out: &Path) -> PathBuf {
         );
         run_command(
             Command::new("git").arg("-C").arg(&path)
-                .arg("checkout").arg("--detach").arg("FETCH_HEAD"),
+                .arg("checkout").arg("--force").arg("--detach").arg("FETCH_HEAD"),
             "checkout pinned OSR source",
         );
     }
     assert!(path.join("CMakeLists.txt").is_file(), "OSR checkout missing CMakeLists.txt");
+    exclude_backend_dependencies(&path);
     path
 }
 
