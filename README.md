@@ -1,7 +1,6 @@
 # osr-ffi
 
-Native Rust/C++ bridge to [Catenary OSR](https://github.com/catenarytransit/osr)
-(and its upstream [MOTIS OSR](https://github.com/motis-project/osr)).
+Native Rust/C++ bridge to [MOTIS OSR](https://github.com/motis-project/osr).
 It calls the original native routing code using the `cxx` crate: the OSR graph,
 R-tree and elevation data remain owned and memory-mapped by C++.
 
@@ -12,20 +11,18 @@ native `pkg` build dependencies. For a reproducible production build, pass
 a known revision via `OSR_SOURCE_DIR` or `OSR_REV`.
 
 ```sh
-# Prefer this for local builds / CI with a checked-out fork:
-git clone https://github.com/catenarytransit/osr.git ../osr
-OSR_SOURCE_DIR=../osr cargo test
-
-# Alternatively, Cargo attempts to clone the Catenary fork.
-# If it cannot be reached, it logs a warning and checks out a pinned
-# upstream OSR commit (d53c174408a859f29be7bd5cfbf176cf9649cd06).
+# Default: import pinned MOTIS OSR (d53c174408a859f29be7bd5cfbf176cf9649cd06).
 cargo test
+
+# Use an existing checkout to avoid refetching native sources:
+git clone https://github.com/motis-project/osr.git ../osr
+OSR_SOURCE_DIR=../osr cargo test
 ```
 
-`OSR_GIT_URL` overrides the preferred fork URL; `OSR_REV` selects
-a fork revision on first clone. To use a particular revision after a
-successful build, remove the cached Cargo build output or pass
-`OSR_SOURCE_DIR`. The build compiles OSR with its own top-level CMake
+`OSR_GIT_URL` overrides the MOTIS source URL; `OSR_REV` selects
+a source revision. The build checks the cached checkout's current HEAD
+against the requested revision, and refetches when the revision changes.
+`OSR_SOURCE_DIR` points to an externally managed checkout. The build compiles OSR with its own top-level CMake
 project and injects a native shared bridge target, without editing OSR files.
 Dependencies are fetched through OSR's pinned `.pkg` configuration.
 
