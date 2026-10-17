@@ -181,11 +181,21 @@ pub enum Direction {
 
 impl ffi::Coordinate {
     pub fn outdoor(lat: f64, lon: f64) -> Self {
-        Self { lat, lon, has_level: false, level: 0.0 }
+        Self {
+            lat,
+            lon,
+            has_level: false,
+            level: 0.0,
+        }
     }
 
     pub fn indoor(lat: f64, lon: f64, level: f32) -> Self {
-        Self { lat, lon, has_level: true, level }
+        Self {
+            lat,
+            lon,
+            has_level: true,
+            level,
+        }
     }
 }
 
@@ -235,13 +245,23 @@ mod tests {
     #[test]
     fn all_profiles_have_stable_distinct_codes() {
         let profiles = [
-            Profile::Foot, Profile::Wheelchair, Profile::Bike,
-            Profile::BikeFast, Profile::BikeElevationLow,
-            Profile::BikeElevationHigh, Profile::Car, Profile::Hgv,
-            Profile::CarDropOff, Profile::CarDropOffWheelchair,
-            Profile::CarParking, Profile::CarParkingWheelchair,
-            Profile::BikeSharing, Profile::CarSharing, Profile::Bus,
-            Profile::Railway, Profile::Ferry,
+            Profile::Foot,
+            Profile::Wheelchair,
+            Profile::Bike,
+            Profile::BikeFast,
+            Profile::BikeElevationLow,
+            Profile::BikeElevationHigh,
+            Profile::Car,
+            Profile::Hgv,
+            Profile::CarDropOff,
+            Profile::CarDropOffWheelchair,
+            Profile::CarParking,
+            Profile::CarParkingWheelchair,
+            Profile::BikeSharing,
+            Profile::CarSharing,
+            Profile::Bus,
+            Profile::Railway,
+            Profile::Ferry,
         ];
         for (i, profile) in profiles.iter().enumerate() {
             assert_eq!(*profile as usize, i);
