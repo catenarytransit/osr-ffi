@@ -22,9 +22,9 @@ OSR_SOURCE_DIR=../osr cargo test
 `OSR_GIT_URL` overrides the MOTIS source URL; `OSR_REV` selects
 a source revision. The build checks the cached checkout's current HEAD
 against the requested revision, and refetches when the revision changes.
-`OSR_SOURCE_DIR` points to an externally managed checkout. The build compiles OSR with its own top-level CMake
+`OSR_SOURCE_DIR` points to an externally managed checkout. Its source files are staged under Cargo's `OUT_DIR` before filtering `[net]`, so the original checkout is never modified. The build compiles OSR with its own top-level CMake
 project and injects a native shared bridge target, without editing OSR files.
-Dependencies are fetched through OSR's pinned `.pkg` configuration.
+Dependencies are fetched through OSR's pinned `.pkg` configuration. The build excludes the root `[net]` dependency because routing does not link OSR's HTTP backend; this avoids LibreSSL's broken OpenBSD submodule.
 
 On Linux, the generated `libcatenary_osr_bridge.so` is under Cargo's
 build `OUT_DIR/native-lib`. Deploy the shared library with consuming
@@ -92,7 +92,7 @@ fn example() -> Result<(), Box<dyn std::error::Error>> {
   searches. Cost-only mode (`include_segments=false`) avoids geometry
   reconstruction and can have zero distance. Result order matches targets.
 - **Coordinate snapping**: native lookup with strict-radius candidates or
-  the OSR fallback radius-expansion behavior.
+  the OSR fallback radius-expansion behavior. Strict mode filters the expanded lookup results to the original radius because OSR's unexpanded lookup method is private.
 - **Map matching**: OSR's trace matcher, including routed/beeline counts,
   segment offsets, search diagnostics and reconstructed geometry.
 - The native routing graph is opened read-only once, with optional elevation
