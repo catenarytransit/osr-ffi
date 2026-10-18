@@ -3,9 +3,7 @@
 //! The routing graph and coordinate index remain in C++ and are opened once.
 //! OSR's original Dijkstra, bidirectional A*, one-to-many and map-matching
 //! implementations are invoked directly. No Rust reimplementation is involved.
-//!
-//! Build using the Catenary OSR fork, or supply `OSR_SOURCE_DIR` to use a
-//! preexisting checkout. See README.md for the build and deployment contract.
+
 
 #[cxx::bridge(namespace = "catenary_osr")]
 pub mod ffi {
