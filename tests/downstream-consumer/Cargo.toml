@@ -1,0 +1,8 @@
+[package]
+name = "osr-ffi-downstream-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+osr-ffi = { path = "../.." }

@@ -260,8 +260,15 @@ set_target_properties(catenary_osr_bridge PROPERTIES
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=catenary_osr_bridge");
 
+    // A dependency's rustc-link-arg does NOT propagate to its reverse dependencies.
+    // Cargo makes this metadata available to a direct dependent's build.rs as
+    // DEP_CATENARY_OSR_BRIDGE_LIB_DIR, letting the final binary emit its own RUNPATH.
+    // This is deliberately the directory of the completed .so, not a CMake build dir.
+    println!("cargo:metadata=lib_dir={}", lib_dir.display());
+
     if cfg!(target_os = "linux") {
-        // This path also needs to be deployed for downstream binaries.
+        // Useful only for examples/tests/binaries built *in this package*.
+        // Downstream binaries must set their own rpath using the metadata above.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
     }
 }

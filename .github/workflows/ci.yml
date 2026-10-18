@@ -23,3 +23,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ninja-build cmake build-essential
       - name: Native build and Rust tests
         run: cargo test --verbose
+      - name: Standalone downstream executable without LD_LIBRARY_PATH
+        run: |
+          CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
+          env -u LD_LIBRARY_PATH ./target/debug/osr-ffi-downstream-consumer
+          readelf -d ./target/debug/osr-ffi-downstream-consumer | grep -E 'RUNPATH|RPATH'

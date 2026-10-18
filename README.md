@@ -39,6 +39,63 @@ applications and set the appropriate runtime library search path
 (`LD_LIBRARY_PATH`, rpath or linker packaging). macOS/Windows will
 similarly require platform-specific dynamic-library packaging.
 
+## Linux runtime linking in downstream Rust executables
+
+The native bridge is currently a shared library (`libcatenary_osr_bridge.so`),
+built in `$OUT_DIR/native-lib`. Cargo's `rustc-link-search` lets a downstream
+Rust crate link it **at build time**, but does **not** install the library or
+add its directory to the final binary's runtime loader search path.
+
+In particular, a `cargo:rustc-link-arg` emitted by **this dependency's**
+`build.rs` cannot set the rpath of an unrelated binary like `osr-tester`.
+Without an explicit runtime path, launching the binary outside Cargo may fail
+with `libcatenary_osr_bridge.so: cannot open shared object file`.
+
+### Application integration (Linux)
+
+In the **consuming binary crate**, add `build.rs`:
+
+```rust
+use std::env;
+
+fn main() {
+    // Exported by osr-ffi's links="catenary_osr_bridge" build metadata.
+    #[cfg(target_os = "linux")]
+    {
+        let dir = env::var("DEP_CATENARY_OSR_BRIDGE_LIB_DIR")
+            .expect("osr-ffi must be a direct dependency of this crate");
+
+        // Relocatable production layout: <binary dir>/lib/libcatenary_osr_bridge.so.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        // Local development: work with Cargo's prebuilt native library.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+    }
+}
+```
+
+This is executable-specific: `cargo:metadata=lib_dir=...` above makes the
+path available to the consumer's `build.rs` as
+`DEP_CATENARY_OSR_BRIDGE_LIB_DIR`. Cargo does not forward rpath linker
+arguments automatically from library dependencies to binary crates. Keep
+`osr-ffi` as a direct dependency.
+
+Run your binary normally after building:
+
+```sh
+cargo build --release
+./target/release/your-binary
+readelf -d target/release/your-binary | grep -E 'RUNPATH|RPATH'
+```
+
+For deployment, copy `libcatenary_osr_bridge.so` into `lib/` next to
+the executable and ship **both**. The `$ORIGIN/lib` runtime path then
+works independently of Cargo's build directory. Other native dynamic
+dependencies, if any, must also be packaged or installed appropriately.
+
+The regression fixture under `tests/downstream-consumer` checks a standalone
+downstream executable **without** `LD_LIBRARY_PATH` (rather than `cargo run`,
+which can modify the dynamic-loader environment).
+
 ## Compile an OSR dataset
 
 ```sh
