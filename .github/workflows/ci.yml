@@ -15,15 +15,15 @@ jobs:
       - run: cargo fmt --check
 
   native:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
-      CC: gcc-14
-      CXX: g++-14
+      CC: gcc-15
+      CXX: g++-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 ninja-build cmake build-essential binutils libtbb-dev
+      - run: sudo apt-get update && sudo apt-get install -y gcc-15 g++-15 ninja-build cmake build-essential binutils libtbb-dev
       - name: Validate native C++23 toolchain
         shell: bash
         run: |
@@ -44,6 +44,28 @@ jobs:
           "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
       - name: Native build and Rust tests
         run: cargo test --verbose
+      - name: Verify CMake uses GCC 15 and C++23
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import shlex
+
+          paths = glob.glob("target/debug/build/osr-ffi-*/out/build/compile_commands.json")
+          assert len(paths) == 1, f"expected one OSR compilation database: {paths}"
+          with open(paths[0], encoding="utf-8") as source:
+              commands = json.load(source)
+
+          for name in ("src/elevation_storage.cc", "cpp/router.cc"):
+              matches = [entry for entry in commands if entry["file"].endswith(name)]
+              assert len(matches) == 1, f"expected one compile command for {name}"
+              entry = matches[0]
+              argv = entry.get("arguments") or shlex.split(entry["command"])
+              assert os.path.basename(argv[0]) == "g++-15", f"{name}: {argv[0]}"
+              assert "-std=c++23" in argv, f"{name} did not use -std=c++23: {argv}"
+          PY
       - name: Verify native bridge resolves oneTBB at runtime
         shell: bash
         run: |
@@ -61,7 +83,7 @@ jobs:
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
           env -u LD_LIBRARY_PATH ./target/debug/osr-ffi-downstream-consumer
           readelf -d ./target/debug/osr-ffi-downstream-consumer | grep -E 'RUNPATH|RPATH'
-      - name: Release downstream consumer on Ubuntu 24.04
+      - name: Release downstream consumer on Ubuntu 26.04
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --release --manifest-path tests/downstream-consumer/Cargo.toml --verbose
           env -u LD_LIBRARY_PATH ./target/release/osr-ffi-downstream-consumer
