@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 ninja-build cmake build-essential
+      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 ninja-build cmake build-essential binutils libtbb-dev
       - name: Validate native C++23 toolchain
         shell: bash
         run: |
@@ -44,6 +44,18 @@ jobs:
           "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
       - name: Native build and Rust tests
         run: cargo test --verbose
+      - name: Verify native bridge resolves oneTBB at runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bridge="$(find target/debug/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          test -n "$bridge"
+          readelf -d "$bridge" | tee /tmp/osr-native-dependencies.txt
+          grep -F 'libtbb.so' /tmp/osr-native-dependencies.txt
+          ldd -r "$bridge" | tee /tmp/osr-native-symbols.txt
+          if grep -E 'undefined symbol|not found' /tmp/osr-native-symbols.txt; then
+            exit 1
+          fi
       - name: Standalone downstream executable without LD_LIBRARY_PATH
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
