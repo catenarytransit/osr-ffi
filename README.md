@@ -6,8 +6,18 @@ R-tree and elevation data remain owned and memory-mapped by C++.
 
 ## Build
 
-Requirements: a C++23 toolchain, CMake, Git, a working linker and OSR's
-native `pkg` build dependencies.
+Requirements: a C++23 toolchain with the required standard-library features,
+CMake, Git, a working linker and OSR's native `pkg` build dependencies.
+MOTIS uses C++23 and selects GCC 15 for its CPU build preset. The osr-ffi CI
+mirrors that choice on Ubuntu 26.04. Set both compiler variables to keep the
+Rust C++ bridge and CMake native build consistent:
+
+```sh
+CC=gcc-15 CXX=g++-15 cargo test
+```
+
+The build checks `std::views::zip`, `std::views::chunk`, and
+`std::unreachable` before fetching or compiling native dependencies.
 
 Native dependencies are compiled from source. This can take substantial time on a
 first build, especially on laptops. By default the bridge uses two native build
