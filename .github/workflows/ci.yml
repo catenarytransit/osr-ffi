@@ -58,6 +58,23 @@ jobs:
           cat /tmp/osr-native-symbols.txt
           python3 - <<'PY'
           from pathlib import Path
+          import subprocess
+
+          def is_deferred_cxx_symbol(symbol):
+              if symbol.startswith("cxxbridge1$"):
+                  return True
+              result = subprocess.run(
+                  ["c++filt", symbol],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              return result.stdout.strip().startswith("rust::cxxbridge1::")
+
+          # Const and non-const C++ members have different mangled prefixes.
+          assert is_deferred_cxx_symbol("_ZNK4rust10cxxbridge13Str4sizeEv")
+          assert is_deferred_cxx_symbol("_ZN4rust10cxxbridge18slicePtrEPKv")
+          assert not is_deferred_cxx_symbol("_ZN3foo3barEv")
 
           failures = []
           for line in Path("/tmp/osr-native-symbols.txt").read_text().splitlines():
@@ -65,10 +82,7 @@ jobs:
                   failures.append(line)
               elif "undefined symbol:" in line:
                   symbol = line.split("undefined symbol:", 1)[1].strip().split()[0]
-                  if not (
-                      symbol.startswith("_ZN4rust10cxxbridge1")
-                      or symbol.startswith("cxxbridge1$")
-                  ):
+                  if not is_deferred_cxx_symbol(symbol):
                       failures.append(line)
           if failures:
               raise SystemExit("Unexpected unresolved native dependencies:\n" + "\n".join(failures))
