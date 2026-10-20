@@ -238,6 +238,12 @@ osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
     "  location location;"
     "  osm::location location;")
 osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "  location_to_ring_map(location l,"
+    "  location_to_ring_map(osm::location l,")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "  explicit location_to_ring_map(location l) noexcept"
+    "  explicit location_to_ring_map(osm::location l) noexcept")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
     "  location location(const segment_list& segment_list) const noexcept"
     "  osm::location location(const segment_list& segment_list) const noexcept")
 osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
