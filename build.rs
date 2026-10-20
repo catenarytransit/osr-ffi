@@ -208,6 +208,48 @@ endif()
     fs::write(
         &deferred,
         r#"
+# Pinned motis-project/osm 2311ac6 predates stricter GCC C++23 checks.
+# These changes affect only Cargo's checked-out native dependency.
+function(osr_ffi_fix_osm relative_path previous corrected)
+  set(path "${CMAKE_SOURCE_DIR}/deps/osm/${relative_path}")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "Pinned OSM dependency missing: ${path}")
+  endif()
+  file(READ "${path}" source)
+  string(FIND "${source}" "${previous}" position)
+  if(position EQUAL -1)
+    string(FIND "${source}" "${corrected}" already_fixed)
+    if(already_fixed EQUAL -1)
+      message(FATAL_ERROR "Unexpected pinned OSM source in ${path}")
+    endif()
+    return()
+  endif()
+  string(REPLACE "${previous}" "${corrected}" updated "${source}")
+  file(WRITE "${path}" "${updated}")
+endfunction()
+
+osr_ffi_fix_osm("include/osm/assembler/vec.h"
+    "  constexpr explicit vec(const node_ref& nr) noexcept"
+    "  explicit vec(const node_ref& nr) noexcept")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "      location location;"
+    "      osm::location location;")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "  location location;"
+    "  osm::location location;")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "  location location(const segment_list& segment_list) const noexcept"
+    "  osm::location location(const segment_list& segment_list) const noexcept")
+osr_ffi_fix_osm("include/osm/assembler/assembler_types.h"
+    "  const node_ref& node_ref(const segment_list& segment_list) const noexcept"
+    "  const osm::node_ref& node_ref(const segment_list& segment_list) const noexcept")
+osr_ffi_fix_osm("include/osm/assembler/state.h"
+    "  segment_list segment_list{};"
+    "  osm::segment_list segment_list{};")
+osr_ffi_fix_osm("include/osm/assembler/state.h"
+    "  problem_reporter problem_reporter;"
+    "  osm::problem_reporter problem_reporter;")
+
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
     "${OSR_FFI_ROOT}"
