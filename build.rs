@@ -306,7 +306,7 @@ set_target_properties(catenary_osr_bridge PROPERTIES
     // Cargo makes this metadata available to a direct dependent's build.rs as
     // DEP_CATENARY_OSR_BRIDGE_LIB_DIR, letting the final binary emit its own RUNPATH.
     // This is deliberately the directory of the completed .so, not a CMake build dir.
-    println!("cargo:metadata=lib_dir={}", lib_dir.display());
+    println!("cargo::metadata=lib_dir={}", lib_dir.display());
 
     if cfg!(target_os = "linux") {
         // Useful only for examples/tests/binaries built *in this package*.
