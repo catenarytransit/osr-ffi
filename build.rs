@@ -297,8 +297,12 @@ add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
     "${OSR_FFI_ROOT}"
     "${OSR_FFI_CXX_INCLUDES}")
-target_link_libraries(catenary_osr_bridge PRIVATE osr)
+find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+target_link_libraries(catenary_osr_bridge PRIVATE osr TBB::tbb)
 target_compile_features(catenary_osr_bridge PRIVATE cxx_std_23)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(catenary_osr_bridge PRIVATE "-Wl,--no-undefined")
+endif()
 set_target_properties(catenary_osr_bridge PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}")
