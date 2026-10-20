@@ -73,7 +73,7 @@ fn main() {
 }
 ```
 
-This is executable-specific: `cargo:metadata=lib_dir=...` above makes the
+This is executable-specific: `cargo::metadata=lib_dir=...` above makes the
 path available to the consumer's `build.rs` as
 `DEP_CATENARY_OSR_BRIDGE_LIB_DIR`. Cargo does not forward rpath linker
 arguments automatically from library dependencies to binary crates. Keep

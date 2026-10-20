@@ -4,7 +4,6 @@
 //! OSR's original Dijkstra, bidirectional A*, one-to-many and map-matching
 //! implementations are invoked directly. No Rust reimplementation is involved.
 
-
 #[cxx::bridge(namespace = "catenary_osr")]
 pub mod ffi {
     /// Geographic coordinate in degrees, with an optional OSM indoor level.
