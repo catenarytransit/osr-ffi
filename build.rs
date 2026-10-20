@@ -1,7 +1,8 @@
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 fn run_command(cmd: &mut Command, what: &str) {
@@ -167,7 +168,43 @@ fn resolve_source(out: &Path) -> PathBuf {
     path
 }
 
+fn require_cxx23_library() {
+    let compiler = env::var_os("CXX").unwrap_or_else(|| "c++".into());
+    let mut child = Command::new(&compiler)
+        .args(["-std=c++23", "-x", "c++", "-fsyntax-only", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("starting C++23 compiler");
+
+    const PROBE: &str = r#"
+#include <array>
+#include <ranges>
+#include <utility>
+int main() {
+    std::array<int, 2> a{1, 2}, b{3, 4};
+    for (auto [x, y] : std::views::zip(a, b)) { (void)x; (void)y; }
+    for (auto chunk : std::views::chunk(a, 1)) { (void)chunk; }
+    if (a.empty()) std::unreachable();
+}
+"#;
+    child
+        .stdin
+        .take()
+        .expect("C++ compiler stdin")
+        .write_all(PROBE.as_bytes())
+        .expect("write C++23 feature test");
+    let status = child.wait().expect("wait for C++23 feature test");
+    assert!(
+        status.success(),
+        "MOTIS OSR requires C++23 library features (views::zip, views::chunk, std::unreachable). Use GCC 13+ (recommended GCC 14) and set CXX accordingly."
+    );
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=CXX");
+    require_cxx23_library();
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=include/router.h");
     println!("cargo:rerun-if-changed=cpp/router.cc");
