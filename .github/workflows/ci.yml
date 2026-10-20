@@ -15,12 +15,33 @@ jobs:
       - run: cargo fmt --check
 
   native:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build cmake build-essential
+      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 ninja-build cmake build-essential
+      - name: Validate native C++23 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -n 1
+          cat > /tmp/osr-cxx23-check.cc <<'EOF'
+          #include <array>
+          #include <ranges>
+          #include <utility>
+          int main() {
+            std::array<int, 3> a{1, 2, 3};
+            std::array<int, 3> b{4, 5, 6};
+            for (auto [x, y] : std::views::zip(a, b)) { (void)x; (void)y; }
+            for (auto chunk : std::views::chunk(a, 2)) { (void)chunk; }
+            if (a.empty()) std::unreachable();
+          }
+          EOF
+          "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
       - name: Native build and Rust tests
         run: cargo test --verbose
       - name: Standalone downstream executable without LD_LIBRARY_PATH
@@ -28,7 +49,7 @@ jobs:
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
           env -u LD_LIBRARY_PATH ./target/debug/osr-ffi-downstream-consumer
           readelf -d ./target/debug/osr-ffi-downstream-consumer | grep -E 'RUNPATH|RPATH'
-      - name: Release downstream consumer on Ubuntu 22.04
+      - name: Release downstream consumer on Ubuntu 24.04
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --release --manifest-path tests/downstream-consumer/Cargo.toml --verbose
           env -u LD_LIBRARY_PATH ./target/release/osr-ffi-downstream-consumer
