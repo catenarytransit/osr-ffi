@@ -300,9 +300,10 @@ target_include_directories(catenary_osr_bridge PRIVATE
 find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
 target_link_libraries(catenary_osr_bridge PRIVATE osr TBB::tbb)
 target_compile_features(catenary_osr_bridge PRIVATE cxx_std_23)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_link_options(catenary_osr_bridge PRIVATE "-Wl,--no-undefined")
-endif()
+# The generated CXX implementation is compiled by Cargo into the Rust
+# executable. This shared library deliberately refers to its Str/Vec methods;
+# requiring --no-undefined here incorrectly rejects that arrangement.
+# The final Rust executable is checked with immediate dynamic binding in CI.
 set_target_properties(catenary_osr_bridge PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${OSR_FFI_LIB_DIR}")

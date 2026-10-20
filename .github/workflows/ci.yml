@@ -44,7 +44,7 @@ jobs:
           "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
       - name: Native build and Rust tests
         run: cargo test --verbose
-      - name: Verify native bridge resolves oneTBB at runtime
+      - name: Verify shared OSR dependencies and deferred CXX symbols
         shell: bash
         run: |
           set -euo pipefail
@@ -52,17 +52,54 @@ jobs:
           test -n "$bridge"
           readelf -d "$bridge" | tee /tmp/osr-native-dependencies.txt
           grep -F 'libtbb.so' /tmp/osr-native-dependencies.txt
-          ldd -r "$bridge" | tee /tmp/osr-native-symbols.txt
-          if grep -E 'undefined symbol|not found' /tmp/osr-native-symbols.txt; then
-            exit 1
-          fi
+          # CXX's implementations are linked into the consuming Rust binary,
+          # not into this CMake-built shared library.
+          ldd -r "$bridge" > /tmp/osr-native-symbols.txt 2>&1 || true
+          cat /tmp/osr-native-symbols.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def is_deferred_cxx_symbol(symbol):
+              if symbol.startswith("cxxbridge1$"):
+                  return True
+              result = subprocess.run(
+                  ["c++filt", symbol],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              return result.stdout.strip().startswith("rust::cxxbridge1::")
+
+          # Const and non-const C++ members have different mangled prefixes.
+          assert is_deferred_cxx_symbol("_ZNK4rust10cxxbridge13Str4sizeEv")
+          assert is_deferred_cxx_symbol("_ZN4rust10cxxbridge18slicePtrEPKv")
+          assert not is_deferred_cxx_symbol("_ZN3foo3barEv")
+
+          failures = []
+          for line in Path("/tmp/osr-native-symbols.txt").read_text().splitlines():
+              if "not found" in line:
+                  failures.append(line)
+              elif "undefined symbol:" in line:
+                  symbol = line.split("undefined symbol:", 1)[1].strip().split()[0]
+                  if not is_deferred_cxx_symbol(symbol):
+                      failures.append(line)
+          if failures:
+              raise SystemExit("Unexpected unresolved native dependencies:\n" + "\n".join(failures))
+          PY
       - name: Standalone downstream executable without LD_LIBRARY_PATH
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
-          env -u LD_LIBRARY_PATH ./target/debug/osr-ffi-downstream-consumer
+          env -u LD_LIBRARY_PATH LD_BIND_NOW=1 ./target/debug/osr-ffi-downstream-consumer
           readelf -d ./target/debug/osr-ffi-downstream-consumer | grep -E 'RUNPATH|RPATH'
+          ldd -r ./target/debug/osr-ffi-downstream-consumer > /tmp/osr-downstream-debug-symbols.txt 2>&1
+          cat /tmp/osr-downstream-debug-symbols.txt
+          if grep -E 'undefined symbol|not found' /tmp/osr-downstream-debug-symbols.txt; then exit 1; fi
       - name: Release downstream consumer on Ubuntu 24.04
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --release --manifest-path tests/downstream-consumer/Cargo.toml --verbose
-          env -u LD_LIBRARY_PATH ./target/release/osr-ffi-downstream-consumer
+          env -u LD_LIBRARY_PATH LD_BIND_NOW=1 ./target/release/osr-ffi-downstream-consumer
           readelf -d ./target/release/osr-ffi-downstream-consumer | grep -E 'RUNPATH|RPATH'
+          ldd -r ./target/release/osr-ffi-downstream-consumer > /tmp/osr-downstream-release-symbols.txt 2>&1
+          cat /tmp/osr-downstream-release-symbols.txt
+          if grep -E 'undefined symbol|not found' /tmp/osr-downstream-release-symbols.txt; then exit 1; fi

@@ -46,6 +46,15 @@ built in `$OUT_DIR/native-lib`. Cargo's `rustc-link-search` lets a downstream
 Rust crate link it **at build time**, but does **not** install the library or
 add its directory to the final binary's runtime loader search path.
 
+The CMake shared library uses CXX's `rust::Str` and `rust::Vec` types, whose
+C++ implementations come from the generated `cxx-build` archive linked into
+the Rust executable. Accordingly, the shared library has intentionally unresolved
+`rust::cxxbridge1` references until it is linked with the consuming Rust
+executable. Do not enforce `-Wl,--no-undefined` when linking this CMake target
+or try to load this shared object independently of its Rust consumer. CI checks
+the final executable with eager symbol resolution (`LD_BIND_NOW=1`) and
+`ldd -r`, and verifies native dependency resolution separately.
+
 In particular, a `cargo:rustc-link-arg` emitted by **this dependency's**
 `build.rs` cannot set the rpath of an unrelated binary like `osr-tester`.
 Without an explicit runtime path, launching the binary outside Cargo may fail
