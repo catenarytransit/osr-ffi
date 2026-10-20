@@ -198,11 +198,12 @@ int main() {
     let status = child.wait().expect("wait for C++23 feature test");
     assert!(
         status.success(),
-        "MOTIS OSR requires C++23 library features (views::zip, views::chunk, std::unreachable). Use GCC 13+ (recommended GCC 14) and set CXX accordingly."
+        "MOTIS OSR requires C++23 library features (views::zip, views::chunk, std::unreachable). Use a compiler providing these C++23 features (MOTIS CPU builds use GCC 15); set CXX accordingly."
     );
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CC");
     println!("cargo:rerun-if-env-changed=CXX");
     require_cxx23_library();
     println!("cargo:rerun-if-changed=src/lib.rs");
@@ -318,12 +319,24 @@ set_target_properties(catenary_osr_bridge PROPERTIES
         .define("OSR_FFI_ROOT", &root)
         .define("OSR_FFI_CXX_INCLUDES", &include_dir)
         .define("OSR_FFI_LIB_DIR", &lib_dir)
+        .define("CMAKE_CXX_STANDARD", "23")
+        .define("CMAKE_CXX_STANDARD_REQUIRED", "ON")
+        .define("CMAKE_CXX_EXTENSIONS", "OFF")
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("OSR_MIMALLOC", "OFF")
         .define("CMAKE_EXPORT_COMPILE_COMMANDS", "ON")
         .define("CMAKE_CXX_FLAGS_DEBUG", "-O0 -g0")
         .define("CMAKE_C_FLAGS_DEBUG", "-O0 -g0");
+
+    // CMake caches compilers, so explicitly forward Cargo's selection rather
+    // than allowing the native build to reuse a different default compiler.
+    if let Some(cxx) = env::var_os("CXX") {
+        config.define("CMAKE_CXX_COMPILER", cxx);
+    }
+    if let Some(cc) = env::var_os("CC") {
+        config.define("CMAKE_C_COMPILER", cc);
+    }
 
     // Large C++23 templates can exhaust RAM under unbounded Make/CMake -j.
     // Default to two native workers; callers may tune OSR_BUILD_JOBS.
