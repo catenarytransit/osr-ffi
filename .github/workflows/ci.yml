@@ -87,6 +87,19 @@ jobs:
           if failures:
               raise SystemExit("Unexpected unresolved native dependencies:\n" + "\n".join(failures))
           PY
+      - name: Link native OSR extractor with oneTBB
+        shell: bash
+        run: |
+          set -euo pipefail
+          bridge="$(find target/debug/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          test -f "$bridge"
+          out_dir="${bridge%/native-lib/libcatenary_osr_bridge.so}"
+          cmake --build "$out_dir/build" --target osr-extract --parallel 2
+          extractor="$out_dir/build/osr-extract"
+          test -x "$extractor"
+          ldd "$extractor" | tee /tmp/osr-extract-ldd.txt
+          grep -F 'libtbb.so' /tmp/osr-extract-ldd.txt
+          if grep -F 'not found' /tmp/osr-extract-ldd.txt; then exit 1; fi
       - name: Standalone downstream executable without LD_LIBRARY_PATH
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose
