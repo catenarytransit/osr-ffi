@@ -331,6 +331,12 @@ set_target_properties(catenary_osr_bridge PROPERTIES
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("OSR_MIMALLOC", "OFF")
+        // Upstream buildcache.cmake downloads a GitLab tarball without checking
+        // the transfer or extraction result, then registers the binary as a
+        // global compiler launcher. A partial download can therefore turn a
+        // clean CI build into a native compiler crash. The optional compiler
+        // cache is not needed by this FFI; disable it deterministically.
+        .define("NO_BUILDCACHE", "ON")
         .define("CMAKE_EXPORT_COMPILE_COMMANDS", "ON")
         .define("CMAKE_CXX_FLAGS_DEBUG", "-O0 -g0")
         .define("CMAKE_C_FLAGS_DEBUG", "-O0 -g0");
