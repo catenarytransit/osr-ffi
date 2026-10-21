@@ -299,6 +299,15 @@ target_include_directories(catenary_osr_bridge PRIVATE
     "${OSR_FFI_CXX_INCLUDES}")
 find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
 target_link_libraries(catenary_osr_bridge PRIVATE osr TBB::tbb)
+# The OSR static library also instantiates parallel STL algorithms in
+# elevation_storage.cc. Its extractor must link oneTBB explicitly; the
+# bridge's private dependency does not propagate to another executable.
+if(NOT TARGET osr-extract)
+  message(FATAL_ERROR "Pinned OSR checkout has no osr-extract target")
+endif()
+# Upstream osr-extract uses the plain target_link_libraries signature.
+# CMake rejects mixing plain and keyword signatures for one target.
+target_link_libraries(osr-extract TBB::tbb)
 target_compile_features(catenary_osr_bridge PRIVATE cxx_std_23)
 # The generated CXX implementation is compiled by Cargo into the Rust
 # executable. This shared library deliberately refers to its Str/Vec methods;
