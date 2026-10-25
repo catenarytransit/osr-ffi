@@ -388,10 +388,10 @@ RawMatchResult export_matches(osr::match_result const& m) {
 osr::match_result import_matches(RawMatchResult const& r,
                                  osr::ways const& w) {
   if (r.offsets.size() != r.level_codes.size() + 1 ||
-      r.offsets.empty() || r.offsets.front() != 0 ||
+      r.offsets.empty() || r.offsets[0] != 0 ||
       r.way_indices.size() != r.distance_to_way.size() ||
       r.way_indices.size() != r.nodes.size() ||
-      r.offsets.back() != r.way_indices.size()) {
+      r.offsets[r.offsets.size() - 1U] != r.way_indices.size()) {
     throw std::invalid_argument("malformed match_result columns or offsets");
   }
   auto out = osr::match_result{};
