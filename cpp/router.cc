@@ -205,7 +205,7 @@ RouteResult Router::one_to_one(
   auto const path = osr::route(
       parameters, w, impl_->lookup_, profile,
       to_location(from), to_location(to),
-      std::chrono::seconds{options.max_cost},
+      static_cast<osr::cost_t>(options.max_cost),
       get_direction(options.direction), options.max_match_distance_meters,
       blocked_ids.empty() ? nullptr : &blocked,
       nullptr, impl_->elevations_.get(), get_algorithm(options.algorithm),
@@ -247,7 +247,7 @@ rust::Vec<RouteResult> Router::one_to_many(
   }
   auto const paths = osr::route(
       parameters, w, impl_->lookup_, profile, to_location(from), targets,
-      std::chrono::seconds{options.max_cost}, get_direction(options.direction),
+      static_cast<osr::cost_t>(options.max_cost), get_direction(options.direction),
       options.max_match_distance_meters,
       blocked_ids.empty() ? nullptr : &blocked,
       nullptr, impl_->elevations_.get(),
