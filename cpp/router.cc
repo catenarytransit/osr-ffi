@@ -367,7 +367,7 @@ RawMatchResult export_matches(osr::match_result const& m) {
   out.offsets.push_back(0U);
   for (auto i = std::uint32_t{0}; i < m.size(); ++i) {
     auto const v = m[osr::match_idx_t{i}];
-    out.level_codes.push_back(cista::to_idx(v.lvl_));
+    out.level_codes.push_back(to_idx(v.lvl_));
     for (auto j = std::size_t{0}; j < v.size(); ++j) {
       out.distance_to_way.push_back(v.dist_to_way_[j]);
       out.way_indices.push_back(cista::to_idx(v.way_[j]));
@@ -409,7 +409,7 @@ osr::match_result import_matches(RawMatchResult const& r,
   for (auto i = std::size_t{0}; i < r.level_codes.size(); ++i) {
     auto const first = r.offsets[i], last = r.offsets[i + 1];
     if (first > last || last > r.way_indices.size() ||
-        r.level_codes[i] > cista::to_idx(osr::level_t{osr::kMaxLevel})) {
+        r.level_codes[i] > to_idx(osr::level_t{osr::kMaxLevel})) {
       throw std::invalid_argument("invalid match bucket or level");
     }
     out.start(osr::level_t{r.level_codes[i]});
