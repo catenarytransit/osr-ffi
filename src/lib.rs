@@ -78,6 +78,64 @@ pub mod ffi {
         pub right_distance_meters: f64,
     }
 
+    /// Native OSR node index (u32::MAX means invalid), not an OSM node ID.
+    #[derive(Debug, Clone)]
+    pub struct RawNodeCandidate {
+        pub node_index: u32,
+        pub distance_to_node: f32,
+    }
+
+    /// Exact fields of OSR's profile-independent raw_way_candidate.
+    /// Indices belong to the graph used for matching and must not be reused
+    /// against a different OSR graph.
+    #[derive(Debug, Clone)]
+    pub struct RawWayCandidate {
+        pub distance_to_way: f32,
+        pub way_index: u32,
+        pub left: RawNodeCandidate,
+        pub right: RawNodeCandidate,
+    }
+
+    /// OSR match_result::node (the endpoint cost is profile-specific).
+    #[derive(Debug, Clone)]
+    pub struct MatchedNode {
+        pub node_index: u32,
+        pub distance_to_node: f32,
+        pub cost: u32,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MatchedNodes {
+        pub left: MatchedNode,
+        pub right: MatchedNode,
+    }
+
+    /// Owned, inspectable struct-of-arrays copy of osr::match_result at the
+    /// OSR_REV pinned by build.rs. Matches are bucketed by offsets.
+    /// offsets.len() == level_codes.len() + 1; offsets[0] == 0;
+    /// offsets.last() == way_indices.len() == distance_to_way.len() == nodes.len().
+    /// level_codes are OSR level_t encodings (0 = unspecified, not level 0).
+    /// The native graph must be identical when this structure is reused.
+    #[derive(Debug, Clone)]
+    pub struct RawMatchResult {
+        pub offsets: Vec<u32>,
+        pub level_codes: Vec<u8>,
+        pub distance_to_way: Vec<f32>,
+        pub way_indices: Vec<u32>,
+        pub nodes: Vec<MatchedNodes>,
+    }
+
+    /// Arguments to osr::lookup::match; reverse=false for an origin,
+    /// reverse=true for a destination during forward one-to-many routing.
+    #[derive(Debug, Clone)]
+    pub struct MatchOptions {
+        pub profile: u8,
+        pub direction: u8,
+        pub reverse: bool,
+        pub max_match_distance_meters: f64,
+        pub foot_speed_meters_per_second: f32,
+    }
+
     #[derive(Debug, Clone)]
     pub struct MapMatchResult {
         pub path: RouteResult,
@@ -93,6 +151,7 @@ pub mod ffi {
         include!("include/router.h");
 
         type Router;
+        type MatchStore;
 
         fn open_router(data_dir: &str) -> Result<UniquePtr<Router>>;
         fn node_count(self: &Router) -> u64;
@@ -126,6 +185,74 @@ pub mod ffi {
             max_match_distance_meters: f64,
             expand_search: bool,
         ) -> Result<Vec<SnapCandidate>>;
+
+        /// OSR lookup::get_raw_match: reusable profile-independent way/node
+        /// candidates, without converting graph indexes to OSM IDs.
+        fn get_raw_match(
+            self: &Router,
+            point: &Coordinate,
+            max_match_distance_meters: f64,
+        ) -> Result<Vec<RawWayCandidate>>;
+
+        /// OSR lookup::match: resolve profile, direction, level and costs.
+        /// Empty raw_candidates asks OSR to perform geometric matching.
+        /// Returns exactly one match bucket, even when it has zero candidates.
+        fn lookup_match(
+            self: &Router,
+            point: &Coordinate,
+            options: &MatchOptions,
+            raw_candidates: &[RawWayCandidate],
+            blocked_osm_nodes: &[i64],
+        ) -> Result<RawMatchResult>;
+
+        /// Exact pre-matched OSR route_one_to_many overload. Origin matches
+        /// must have one bucket, destination matches one per destination.
+        /// The caller must supply results made for this exact OSR graph,
+        /// profile, direction, parameters and endpoint role; mutable raw
+        /// arrays are validated for index/bucket safety on C++ import.
+        fn route_one_to_many_matched(
+            self: &Router,
+            origin: &Coordinate,
+            destinations: &[Coordinate],
+            origin_match: &RawMatchResult,
+            destination_matches: &RawMatchResult,
+            options: &RoutingOptions,
+            blocked_osm_nodes: &[i64],
+        ) -> Result<Vec<RouteResult>>;
+
+        /// Reusable native match buckets, owned in C++ and bound to this Router.
+        /// A separate store is required for origin vs destination matches.
+        fn create_match_store(self: &Router) -> UniquePtr<MatchStore>;
+
+        /// Append one lookup::match bucket to the native cache. All buckets in
+        /// a store must share matching options; no blocked nodes or dynamic
+        /// start times are supported in cached matches.
+        fn append_lookup_match(
+            self: &Router,
+            store: Pin<&mut MatchStore>,
+            point: &Coordinate,
+            options: &MatchOptions,
+            raw_candidates: &[RawWayCandidate],
+        ) -> Result<u32>;
+
+        /// Export a single cached match bucket as the public owned raw format.
+        fn export_match(
+            self: &Router,
+            store: &MatchStore,
+            index: u32,
+        ) -> Result<RawMatchResult>;
+
+        /// Route using cached origin/destination match buckets without
+        /// repeated FFI copies of all the raw arrays or rematching.
+        /// Supports static matching (has_start_time=false).
+        fn route_one_to_many_cached(
+            self: &Router,
+            origins: &MatchStore,
+            origin_index: u32,
+            destinations: &MatchStore,
+            destination_indices: &[u32],
+            options: &RoutingOptions,
+        ) -> Result<Vec<RouteResult>>;
 
         /// OSR's path map-matching implementation (not coordinate snapping).
         fn map_match(
@@ -196,6 +323,36 @@ impl ffi::Coordinate {
     }
 }
 
+impl Default for ffi::MatchOptions {
+    fn default() -> Self {
+        Self {
+            profile: Profile::Foot as u8,
+            direction: Direction::Forward as u8,
+            reverse: false,
+            max_match_distance_meters: 25.0,
+            foot_speed_meters_per_second: 0.0,
+        }
+    }
+}
+
+impl ffi::RawMatchResult {
+    /// Validate the struct-of-arrays shape before passing it to native code.
+    /// The native adapter additionally validates levels and graph indexes.
+    pub fn has_valid_shape(&self) -> bool {
+        let n = self.way_indices.len();
+        self.offsets.len() == self.level_codes.len() + 1
+            && self.offsets.first() == Some(&0)
+            && self.offsets.last().copied() == u32::try_from(n).ok()
+            && self.distance_to_way.len() == n
+            && self.nodes.len() == n
+            && self.offsets.windows(2).all(|x| x[0] <= x[1])
+    }
+
+    pub fn match_count(&self) -> usize {
+        self.level_codes.len()
+    }
+}
+
 impl Default for ffi::RoutingOptions {
     fn default() -> Self {
         Self {
@@ -263,6 +420,28 @@ mod tests {
         for (i, profile) in profiles.iter().enumerate() {
             assert_eq!(*profile as usize, i);
         }
+    }
+
+    #[test]
+    fn raw_match_result_validates_offsets_and_column_lengths() {
+        let mut m = ffi::RawMatchResult {
+            offsets: vec![0, 0, 0],
+            level_codes: vec![0, 33],
+            distance_to_way: vec![],
+            way_indices: vec![],
+            nodes: vec![],
+        };
+        assert!(m.has_valid_shape());
+        assert_eq!(m.match_count(), 2);
+        m.offsets[1] = 1;
+        assert!(!m.has_valid_shape());
+    }
+
+    #[test]
+    fn match_defaults_use_motis_foot_radius() {
+        let m = ffi::MatchOptions::default();
+        assert_eq!(m.max_match_distance_meters, 25.0);
+        assert_eq!(m.profile, Profile::Foot as u8);
     }
 
     #[test]
