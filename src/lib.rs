@@ -236,11 +236,7 @@ pub mod ffi {
         ) -> Result<u32>;
 
         /// Export a single cached match bucket as the public owned raw format.
-        fn export_match(
-            self: &Router,
-            store: &MatchStore,
-            index: u32,
-        ) -> Result<RawMatchResult>;
+        fn export_match(self: &Router, store: &MatchStore, index: u32) -> Result<RawMatchResult>;
 
         /// Route using cached origin/destination match buckets without
         /// repeated FFI copies of all the raw arrays or rematching.
