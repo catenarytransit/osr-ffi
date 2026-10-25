@@ -438,14 +438,19 @@ bool same_matches(MatchOptions const& a, MatchOptions const& b) {
 
 }  // namespace
 
-struct MatchStore {
+struct MatchStore::Impl {
   Router const* owner_;
   osr::match_result matches_;
   std::vector<osr::location> locations_;
   std::optional<MatchOptions> options_;
 
-  explicit MatchStore(Router const* owner) : owner_{owner} {}
+  explicit Impl(Router const* owner) : owner_{owner} {}
 };
+
+MatchStore::MatchStore(Router const* owner)
+    : impl_{std::make_unique<Impl>(owner)} {}
+
+MatchStore::~MatchStore() = default;
 
 rust::Vec<RawWayCandidate> Router::get_raw_match(
     Coordinate const& point, double max_distance) const {
@@ -526,14 +531,14 @@ std::unique_ptr<MatchStore> Router::create_match_store() const {
 std::uint32_t Router::append_lookup_match(
     MatchStore& store, Coordinate const& point, MatchOptions const& opts,
     rust::Slice<RawWayCandidate const> raw_candidates) const {
-  if (store.owner_ != this) {
+  if (store.impl_->owner_ != this) {
     throw std::invalid_argument("match store belongs to another router");
   }
   validate_match_options(opts);
-  if (store.options_ && !same_matches(*store.options_, opts)) {
+  if (store.impl_->options_ && !same_matches(*store.impl_->options_, opts)) {
     throw std::invalid_argument("inconsistent match store options");
   }
-  if (store.matches_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+  if (store.impl_->matches_.size() >= std::numeric_limits<std::uint32_t>::max()) {
     throw std::invalid_argument("match store full");
   }
   auto const loc = to_location(point);
@@ -542,19 +547,19 @@ std::uint32_t Router::append_lookup_match(
       get_params(get_profile(opts.profile), opts.foot_speed_meters_per_second),
       loc, opts.reverse, get_direction(opts.direction),
       opts.max_match_distance_meters, nullptr,
-      get_profile(opts.profile), raw, store.matches_);
-  store.locations_.push_back(loc);
-  store.options_ = opts;
-  return static_cast<std::uint32_t>(store.locations_.size() - 1U);
+      get_profile(opts.profile), raw, store.impl_->matches_);
+  store.impl_->locations_.push_back(loc);
+  store.impl_->options_ = opts;
+  return static_cast<std::uint32_t>(store.impl_->locations_.size() - 1U);
 }
 
 RawMatchResult Router::export_match(
     MatchStore const& store, std::uint32_t index) const {
-  if (store.owner_ != this || index >= store.matches_.size()) {
+  if (store.impl_->owner_ != this || index >= store.impl_->matches_.size()) {
     throw std::invalid_argument("match store owner/index mismatch");
   }
   auto m = osr::match_result{};
-  m.append(store.matches_, osr::match_idx_t{index});
+  m.append(store.impl_->matches_, osr::match_idx_t{index});
   return export_matches(m);
 }
 
@@ -567,13 +572,13 @@ rust::Vec<RouteResult> Router::route_one_to_many_cached(
       options.max_cost > std::numeric_limits<std::uint16_t>::max()) {
     throw std::invalid_argument("cached routing requires static Dijkstra and <=65535 cost");
   }
-  if (origins.owner_ != this || destinations.owner_ != this ||
-      !origins.options_ || !destinations.options_ ||
-      origin_index >= origins.matches_.size()) {
+  if (origins.impl_->owner_ != this || destinations.impl_->owner_ != this ||
+      !origins.impl_->options_ || !destinations.impl_->options_ ||
+      origin_index >= origins.impl_->matches_.size()) {
     throw std::invalid_argument("invalid cached match store or origin");
   }
-  auto const& a = *origins.options_;
-  auto const& b = *destinations.options_;
+  auto const& a = *origins.impl_->options_;
+  auto const& b = *destinations.impl_->options_;
   if (a.profile != options.profile || b.profile != options.profile ||
       a.direction != options.direction || b.direction != options.direction ||
       a.reverse || !b.reverse ||
@@ -585,17 +590,17 @@ rust::Vec<RouteResult> Router::route_one_to_many_cached(
   auto matches = osr::match_result{};
   to.reserve(indices.size());
   for (auto const idx : indices) {
-    if (idx >= destinations.matches_.size()) {
+    if (idx >= destinations.impl_->matches_.size()) {
       throw std::invalid_argument("cached destination index out of range");
     }
-    to.push_back(destinations.locations_[idx]);
-    matches.append(destinations.matches_, osr::match_idx_t{idx});
+    to.push_back(destinations.impl_->locations_[idx]);
+    matches.append(destinations.impl_->matches_, osr::match_idx_t{idx});
   }
   auto const states = osr::route_one_to_many(
       get_params(get_profile(options.profile), options.foot_speed_meters_per_second),
       impl_->ways_, impl_->lookup_, get_profile(options.profile),
-      origins.locations_[origin_index], to,
-      origins.matches_[osr::match_idx_t{origin_index}], matches,
+      origins.impl_->locations_[origin_index], to,
+      origins.impl_->matches_[osr::match_idx_t{origin_index}], matches,
       options.max_cost, get_direction(options.direction),
       nullptr, nullptr, impl_->elevations_.get(),
       [&options](osr::path const&) { return options.include_segments; },
