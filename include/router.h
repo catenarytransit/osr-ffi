@@ -13,7 +13,22 @@ struct MapMatchResult;
 struct RawWayCandidate;
 struct RawMatchResult;
 struct MatchOptions;
-class MatchStore;
+class Router;
+
+// Complete C++ type required by cxx for UniquePtr<MatchStore>.
+// OSR internals remain hidden so cxx's generated source needs no OSR headers.
+class MatchStore {
+public:
+  explicit MatchStore(Router const*);
+  ~MatchStore();
+  MatchStore(MatchStore const&) = delete;
+  MatchStore& operator=(MatchStore const&) = delete;
+
+private:
+  friend class Router;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 class Router {
 public:
