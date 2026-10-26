@@ -1,7 +1,7 @@
 //! Concurrent read-only access to one OSR graph, with independently
 //! allocated native route/matching state in every thread.
 
-use osr_ffi::{ffi, Profile};
+use osr_ffi::{Profile, ffi};
 use std::sync::Arc;
 
 #[test]
