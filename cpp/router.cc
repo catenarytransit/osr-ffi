@@ -301,6 +301,317 @@ rust::Vec<SnapCandidate> Router::snap(
   return out;
 }
 
+
+namespace {
+
+void validate_match_options(MatchOptions const& o) {
+  (void)get_profile(o.profile);
+  (void)get_direction(o.direction);
+  if (!std::isfinite(o.max_match_distance_meters) ||
+      o.max_match_distance_meters <= 0.0) {
+    throw std::invalid_argument("positive finite match radius required");
+  }
+  (void)get_params(get_profile(o.profile), o.foot_speed_meters_per_second);
+}
+
+osr::bitvec<osr::node_idx_t> build_blocked(
+    osr::ways const& w, rust::Slice<std::int64_t const> blocked_ids) {
+  auto blocked = osr::bitvec<osr::node_idx_t>{};
+  if (!blocked_ids.empty()) {
+    blocked.resize(w.n_nodes());
+    for (auto const id : blocked_ids) {
+      auto const n = w.find_node_idx(osr::to_osm_node_idx(id));
+      if (!n) {
+        throw std::invalid_argument("blocked OSM node not found in this graph");
+      }
+      blocked.set(*n);
+    }
+  }
+  return blocked;
+}
+
+osr::raw_node_candidate import_raw_node(RawNodeCandidate const& n,
+                                         osr::ways const& w) {
+  auto const invalid = std::numeric_limits<std::uint32_t>::max();
+  if (n.node_index != invalid && n.node_index >= w.n_nodes()) {
+    throw std::invalid_argument("raw match node index outside graph");
+  }
+  if (!std::isfinite(n.distance_to_node) || n.distance_to_node < 0.F) {
+    throw std::invalid_argument("invalid raw node distance");
+  }
+  return {osr::node_idx_t{n.node_index}, n.distance_to_node};
+}
+
+std::vector<osr::raw_way_candidate> import_raw(
+    rust::Slice<RawWayCandidate const> input, osr::ways const& w) {
+  auto out = std::vector<osr::raw_way_candidate>{};
+  out.reserve(input.size());
+  for (auto const& r : input) {
+    if (r.way_index >= w.n_ways() ||
+        !std::isfinite(r.distance_to_way) || r.distance_to_way < 0.F) {
+      throw std::invalid_argument("invalid raw way index/distance");
+    }
+    out.push_back(osr::raw_way_candidate{
+        r.distance_to_way, osr::way_idx_t{r.way_index},
+        import_raw_node(r.left, w), import_raw_node(r.right, w)});
+  }
+  return out;
+}
+
+RawNodeCandidate export_raw_node(osr::raw_node_candidate const& n) {
+  return {cista::to_idx(n.node_), n.dist_to_node_};
+}
+
+RawMatchResult export_matches(osr::match_result const& m) {
+  auto out = RawMatchResult{};
+  out.offsets.push_back(0U);
+  for (auto i = std::uint32_t{0}; i < m.size(); ++i) {
+    auto const v = m[osr::match_idx_t{i}];
+    out.level_codes.push_back(to_idx(v.lvl_));
+    for (auto j = std::size_t{0}; j < v.size(); ++j) {
+      out.distance_to_way.push_back(v.dist_to_way_[j]);
+      out.way_indices.push_back(cista::to_idx(v.way_[j]));
+      auto const convert = [](osr::match_result::node const& n) {
+        return MatchedNode{cista::to_idx(n.node_), n.dist_to_node_, n.cost_};
+      };
+      out.nodes.push_back(MatchedNodes{
+          convert(v.nodes_[j].left_), convert(v.nodes_[j].right_)});
+    }
+    if (out.way_indices.size() > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::invalid_argument("too many match candidates");
+    }
+    out.offsets.push_back(static_cast<std::uint32_t>(out.way_indices.size()));
+  }
+  return out;
+}
+
+osr::match_result import_matches(RawMatchResult const& r,
+                                 osr::ways const& w) {
+  if (r.offsets.size() != r.level_codes.size() + 1 ||
+      r.offsets.empty() || r.offsets[0] != 0 ||
+      r.way_indices.size() != r.distance_to_way.size() ||
+      r.way_indices.size() != r.nodes.size() ||
+      r.offsets[r.offsets.size() - 1U] != r.way_indices.size()) {
+    throw std::invalid_argument("malformed match_result columns or offsets");
+  }
+  auto out = osr::match_result{};
+  auto const check_node = [&](MatchedNode const& n) {
+    if (n.node_index != std::numeric_limits<std::uint32_t>::max() &&
+        n.node_index >= w.n_nodes()) {
+      throw std::invalid_argument("matched node outside graph");
+    }
+    if (!std::isfinite(n.distance_to_node) || n.distance_to_node < 0.F) {
+      throw std::invalid_argument("invalid matched node distance");
+    }
+    return osr::match_result::node{
+        osr::node_idx_t{n.node_index}, n.distance_to_node, n.cost};
+  };
+  for (auto i = std::size_t{0}; i < r.level_codes.size(); ++i) {
+    auto const first = r.offsets[i], last = r.offsets[i + 1];
+    if (first > last || last > r.way_indices.size() ||
+        r.level_codes[i] > to_idx(osr::level_t{osr::kMaxLevel})) {
+      throw std::invalid_argument("invalid match bucket or level");
+    }
+    out.start(osr::level_t{r.level_codes[i]});
+    for (auto j = first; j < last; ++j) {
+      if (r.way_indices[j] >= w.n_ways() ||
+          !std::isfinite(r.distance_to_way[j]) ||
+          r.distance_to_way[j] < 0.F) {
+        throw std::invalid_argument("invalid matched way index/distance");
+      }
+      auto const& pair = r.nodes[j];
+      out.add(r.distance_to_way[j], osr::way_idx_t{r.way_indices[j]},
+              osr::match_result::nodes{
+                  check_node(pair.left), check_node(pair.right)});
+    }
+    out.finish();
+  }
+  return out;
+}
+
+bool same_matches(MatchOptions const& a, MatchOptions const& b) {
+  return a.profile == b.profile && a.direction == b.direction &&
+         a.reverse == b.reverse &&
+         a.max_match_distance_meters == b.max_match_distance_meters &&
+         a.foot_speed_meters_per_second == b.foot_speed_meters_per_second;
+}
+
+}  // namespace
+
+struct MatchStore::Impl {
+  Router const* owner_;
+  osr::match_result matches_;
+  std::vector<osr::location> locations_;
+  std::optional<MatchOptions> options_;
+
+  explicit Impl(Router const* owner) : owner_{owner} {}
+};
+
+MatchStore::MatchStore(Router const* owner)
+    : impl_{std::make_unique<Impl>(owner)} {}
+
+MatchStore::~MatchStore() = default;
+
+rust::Vec<RawWayCandidate> Router::get_raw_match(
+    Coordinate const& point, double max_distance) const {
+  if (!std::isfinite(max_distance) || max_distance <= 0.0) {
+    throw std::invalid_argument("positive finite raw match radius required");
+  }
+  auto const native = impl_->lookup_.get_raw_match(
+      to_location(point), max_distance);
+  auto out = rust::Vec<RawWayCandidate>{};
+  out.reserve(native.size());
+  for (auto const& r : native) {
+    out.push_back(RawWayCandidate{r.dist_to_way_, cista::to_idx(r.way_),
+                                 export_raw_node(r.left_),
+                                 export_raw_node(r.right_)});
+  }
+  return out;
+}
+
+RawMatchResult Router::lookup_match(
+    Coordinate const& point, MatchOptions const& opts,
+    rust::Slice<RawWayCandidate const> raw_candidates,
+    rust::Slice<std::int64_t const> blocked_ids) const {
+  validate_match_options(opts);
+  auto const p = get_profile(opts.profile);
+  auto const blocked = build_blocked(impl_->ways_, blocked_ids);
+  auto const raw = import_raw(raw_candidates, impl_->ways_);
+  auto m = osr::match_result{};
+  impl_->lookup_.match(
+      get_params(p, opts.foot_speed_meters_per_second),
+      to_location(point), opts.reverse, get_direction(opts.direction),
+      opts.max_match_distance_meters,
+      blocked_ids.empty() ? nullptr : &blocked, p, raw, m);
+  return export_matches(m);
+}
+
+rust::Vec<RouteResult> Router::route_one_to_many_matched(
+    Coordinate const& origin, rust::Slice<Coordinate const> destinations,
+    RawMatchResult const& origin_match,
+    RawMatchResult const& destination_matches,
+    RoutingOptions const& options,
+    rust::Slice<std::int64_t const> blocked_ids) const {
+  validate_options(options);
+  if (options.algorithm != 0U ||
+      options.max_cost > std::numeric_limits<std::uint16_t>::max()) {
+    throw std::invalid_argument("one-to-many requires Dijkstra and <=65535 max cost");
+  }
+  auto const origin_native = import_matches(origin_match, impl_->ways_);
+  auto const targets_native = import_matches(destination_matches, impl_->ways_);
+  if (origin_native.size() != 1U ||
+      targets_native.size() != destinations.size()) {
+    throw std::invalid_argument("match buckets must align with origin and destinations");
+  }
+  auto targets = std::vector<osr::location>{};
+  targets.reserve(destinations.size());
+  for (auto const& c : destinations) targets.push_back(to_location(c));
+  auto const blocked = build_blocked(impl_->ways_, blocked_ids);
+  auto const states = osr::route_one_to_many(
+      get_params(get_profile(options.profile), options.foot_speed_meters_per_second),
+      impl_->ways_, impl_->lookup_, get_profile(options.profile),
+      to_location(origin), targets,
+      origin_native[osr::match_idx_t{0U}], targets_native,
+      options.max_cost, get_direction(options.direction),
+      blocked_ids.empty() ? nullptr : &blocked, nullptr,
+      impl_->elevations_.get(),
+      [&options](osr::path const&) { return options.include_segments; },
+      get_start_time(options));
+  auto out = rust::Vec<RouteResult>{};
+  for (auto const& p : states->results()) {
+    out.push_back(to_result(impl_->ways_, p, options.include_segments));
+  }
+  return out;
+}
+
+std::unique_ptr<MatchStore> Router::create_match_store() const {
+  return std::make_unique<MatchStore>(this);
+}
+
+std::uint32_t Router::append_lookup_match(
+    MatchStore& store, Coordinate const& point, MatchOptions const& opts,
+    rust::Slice<RawWayCandidate const> raw_candidates) const {
+  if (store.impl_->owner_ != this) {
+    throw std::invalid_argument("match store belongs to another router");
+  }
+  validate_match_options(opts);
+  if (store.impl_->options_ && !same_matches(*store.impl_->options_, opts)) {
+    throw std::invalid_argument("inconsistent match store options");
+  }
+  if (store.impl_->matches_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+    throw std::invalid_argument("match store full");
+  }
+  auto const loc = to_location(point);
+  auto const raw = import_raw(raw_candidates, impl_->ways_);
+  impl_->lookup_.match(
+      get_params(get_profile(opts.profile), opts.foot_speed_meters_per_second),
+      loc, opts.reverse, get_direction(opts.direction),
+      opts.max_match_distance_meters, nullptr,
+      get_profile(opts.profile), raw, store.impl_->matches_);
+  store.impl_->locations_.push_back(loc);
+  store.impl_->options_ = opts;
+  return static_cast<std::uint32_t>(store.impl_->locations_.size() - 1U);
+}
+
+RawMatchResult Router::export_match(
+    MatchStore const& store, std::uint32_t index) const {
+  if (store.impl_->owner_ != this || index >= store.impl_->matches_.size()) {
+    throw std::invalid_argument("match store owner/index mismatch");
+  }
+  auto m = osr::match_result{};
+  m.append(store.impl_->matches_, osr::match_idx_t{index});
+  return export_matches(m);
+}
+
+rust::Vec<RouteResult> Router::route_one_to_many_cached(
+    MatchStore const& origins, std::uint32_t origin_index,
+    MatchStore const& destinations, rust::Slice<std::uint32_t const> indices,
+    RoutingOptions const& options) const {
+  validate_options(options);
+  if (options.algorithm != 0U || options.has_start_time ||
+      options.max_cost > std::numeric_limits<std::uint16_t>::max()) {
+    throw std::invalid_argument("cached routing requires static Dijkstra and <=65535 cost");
+  }
+  if (origins.impl_->owner_ != this || destinations.impl_->owner_ != this ||
+      !origins.impl_->options_ || !destinations.impl_->options_ ||
+      origin_index >= origins.impl_->matches_.size()) {
+    throw std::invalid_argument("invalid cached match store or origin");
+  }
+  auto const& a = *origins.impl_->options_;
+  auto const& b = *destinations.impl_->options_;
+  if (a.profile != options.profile || b.profile != options.profile ||
+      a.direction != options.direction || b.direction != options.direction ||
+      a.reverse || !b.reverse ||
+      a.foot_speed_meters_per_second != options.foot_speed_meters_per_second ||
+      b.foot_speed_meters_per_second != options.foot_speed_meters_per_second) {
+    throw std::invalid_argument("cached origin/destination matching settings differ from routing");
+  }
+  auto to = std::vector<osr::location>{};
+  auto matches = osr::match_result{};
+  to.reserve(indices.size());
+  for (auto const idx : indices) {
+    if (idx >= destinations.impl_->matches_.size()) {
+      throw std::invalid_argument("cached destination index out of range");
+    }
+    to.push_back(destinations.impl_->locations_[idx]);
+    matches.append(destinations.impl_->matches_, osr::match_idx_t{idx});
+  }
+  auto const states = osr::route_one_to_many(
+      get_params(get_profile(options.profile), options.foot_speed_meters_per_second),
+      impl_->ways_, impl_->lookup_, get_profile(options.profile),
+      origins.impl_->locations_[origin_index], to,
+      origins.impl_->matches_[osr::match_idx_t{origin_index}], matches,
+      options.max_cost, get_direction(options.direction),
+      nullptr, nullptr, impl_->elevations_.get(),
+      [&options](osr::path const&) { return options.include_segments; },
+      std::nullopt);
+  auto out = rust::Vec<RouteResult>{};
+  for (auto const& p : states->results()) {
+    out.push_back(to_result(impl_->ways_, p, options.include_segments));
+  }
+  return out;
+}
+
 MapMatchResult Router::map_match(
     rust::Slice<Coordinate const> trace, std::uint8_t profile_code,
     float foot_speed, rust::Slice<std::int64_t const> blocked_ids) const {
