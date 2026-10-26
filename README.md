@@ -148,6 +148,37 @@ fn example() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Share a single graph across query threads
+
+Use `open_shared_router` to eagerly open a region once at startup, then clone
+the handle for each worker. The C++ graph is shared; each query still creates
+its own temporary search state and `MatchStore` objects. Never share a mutable
+match store between simultaneous queries.
+
+```rust,no_run
+use osr_ffi::ffi;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let router = ffi::open_shared_router("/srv/osr/region")?;
+    let threads: Vec<_> = (0..3).map(|_| {
+        let graph = router.clone(); // cheap C++ shared_ptr copy, not a graph copy
+        std::thread::spawn(move || {
+            let graph = graph.as_ref().expect("non-null shared router");
+            graph.node_count() // routing methods can also run concurrently
+        })
+    }).collect();
+    for thread in threads {
+        println!("{} nodes", thread.join().expect("worker panicked"));
+    }
+    Ok(())
+}
+```
+
+Optional integration coverage: set `OSR_TEST_DATA_DIR` to an extracted graph
+directory and run `cargo test --test shared_router`. For meaningful routing
+coverage, set `OSR_TEST_LATITUDE` and `OSR_TEST_LONGITUDE` to a coordinate
+inside that graph. Without a dataset the concurrency integration test skips.
+
 ## Coverage and semantics
 
 - All **17 OSR profiles** are enumerated: foot, wheelchair, four bike
@@ -174,8 +205,14 @@ fn example() -> Result<(), Box<dyn std::error::Error>> {
   unknown IDs return an error. Do not pass raw OSR internal node indices.
 - Search `cost` is a generalized profile weight; `duration_seconds` is
   elapsed travel duration. Do not assume these are always identical.
-- `Router` is not unsafely declared `Sync`: own one per routing worker
-  until concurrent access to every OSR lookup/cache has been audited.
+- `open_shared_router` returns `cxx::SharedPtr<ffi::Router>` for concurrent
+  workers: opening one graph per region and cloning the shared pointer does
+  not clone the graph. `open_router` remains available for existing callers.
+- `Router` is `Send + Sync` under the **read-only query contract**: the C++
+  facade contains only const query methods; graph, lookup, and elevation
+  mappings are READ-only; match stores and Dijkstra state are allocated per
+  request. Any new mutable cache, native API, or OSR revision must be
+  reviewed for concurrent-read safety before reuse.
 
 ## Tests
 
