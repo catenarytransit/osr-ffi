@@ -82,4 +82,6 @@ private:
 };
 
 std::unique_ptr<Router> open_router(rust::Str);
+// Shares one immutable, read-only graph across concurrent routing threads.
+std::shared_ptr<Router> open_shared_router(rust::Str);
 }  // namespace catenary_osr
