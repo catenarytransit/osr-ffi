@@ -1,0 +1,109 @@
+name: Switzerland OSR landmark benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Warm runs per landmark and travel mode
+        type: number
+        required: true
+        default: 10
+  pull_request:
+    paths:
+      - .github/workflows/switzerland-benchmark.yml
+      - tests/switzerland_benchmark.rs
+      - build.rs
+
+permissions:
+  contents: read
+
+jobs:
+  switzerland:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      OSR_BUILD_JOBS: '2'
+      SWISS_OSR_DIR: ${{ runner.temp }}/switzerland-osr
+      SWISS_BENCH_OUTPUT_DIR: ${{ github.workspace }}/switzerland-results
+      SWISS_BENCH_REPEATS: ${{ inputs.repetitions || '10' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Prepare tools and disk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 cmake ninja-build libtbb-dev time
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h .
+      - name: Download Switzerland from Geofabrik
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/swiss-download" "$SWISS_BENCH_OUTPUT_DIR"
+          curl -fL --retry 5 --retry-delay 5 \
+            https://download.geofabrik.de/europe/switzerland-latest.osm.pbf \
+            -o "$RUNNER_TEMP/swiss-download/switzerland.osm.pbf"
+          curl -fL --retry 5 --retry-delay 5 \
+            https://download.geofabrik.de/europe/switzerland-latest.osm.pbf.md5 \
+            -o "$RUNNER_TEMP/swiss-download/checksum.md5"
+          expected="$(grep -Eo '[[:xdigit:]]{32}' "$RUNNER_TEMP/swiss-download/checksum.md5" | head -n 1)"
+          test -n "$expected"
+          printf '%s  %s\n' "$expected" "$RUNNER_TEMP/swiss-download/switzerland.osm.pbf" | md5sum -c
+          sha256sum "$RUNNER_TEMP/swiss-download/switzerland.osm.pbf" > "$SWISS_BENCH_OUTPUT_DIR/osm-sha256.txt"
+          df -h .
+      - name: Build benchmark and OSR extractor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo test --release --test switzerland_benchmark --no-run
+          bridge="$(find target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          test -f "$bridge"
+          out_dir="${bridge%/native-lib/libcatenary_osr_bridge.so}"
+          cmake --build "$out_dir/build" --target osr-extract --parallel 2
+          test -x "$out_dir/build/osr-extract"
+          echo "$out_dir/build/osr-extract" > "$RUNNER_TEMP/osr-extractor-path"
+      - name: Extract Swiss OSM graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          extractor="$(cat "$RUNNER_TEMP/osr-extractor-path")"
+          /usr/bin/time -v "$extractor" \
+            -i "$RUNNER_TEMP/swiss-download/switzerland.osm.pbf" \
+            -o "$SWISS_OSR_DIR" \
+            > "$SWISS_BENCH_OUTPUT_DIR/extraction.log" 2>&1 || {
+              tail -n 100 "$SWISS_BENCH_OUTPUT_DIR/extraction.log"
+              exit 1
+            }
+          tail -n 35 "$SWISS_BENCH_OUTPUT_DIR/extraction.log"
+          test -s "$SWISS_OSR_DIR/routing.bin"
+          du -sh "$SWISS_OSR_DIR"
+          df -h .
+      - name: Run walking and cycling landmark benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v cargo test --release --test switzerland_benchmark \
+            -- --nocapture --test-threads=1 \
+            > "$SWISS_BENCH_OUTPUT_DIR/query.log" 2>&1 || {
+              tail -n 100 "$SWISS_BENCH_OUTPUT_DIR/query.log"
+              exit 1
+            }
+          tail -n 75 "$SWISS_BENCH_OUTPUT_DIR/query.log"
+      - name: Publish report
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$SWISS_BENCH_OUTPUT_DIR/switzerland_summary.md" ]; then
+            cat "$SWISS_BENCH_OUTPUT_DIR/switzerland_summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: switzerland-osr-benchmark
+          path: switzerland-results/
+          if-no-files-found: warn
