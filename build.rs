@@ -72,6 +72,29 @@ fn exclude_backend_dependencies(source: &Path) {
     }
 }
 
+/// Switch the pinned OSR query graph from a private full-file heap buffer to
+/// a shared, read-only file-backed mapping. This operates only on Cargo's
+/// staged source tree, never on an external OSR_SOURCE_DIR checkout.
+/// Fail closed on unexpected upstream code changes rather than silently
+/// benchmarking the old heap-backed reader.
+fn use_readonly_mmap_for_routing_bin(source: &Path) {
+    let path = source.join("src/ways.cc");
+    let original = fs::read_to_string(&path).expect("read native OSR ways.cc");
+    const HEAP: &str =
+        "return cista::read<ways::routing>(p / \"routing.bin\");";
+    const MMAP: &str =
+        "return cista::read_mmap<ways::routing>(p / \"routing.bin\");";
+    match (original.matches(HEAP).count(), original.matches(MMAP).count()) {
+        (1, 0) => {
+            fs::write(&path, original.replacen(HEAP, MMAP, 1))
+                .expect("patch native OSR read-only routing.bin reader");
+        }
+        (0, 1) => {}
+        _ => panic!("OSR routing.bin reader unexpectedly changed: {}", path.display()),
+    }
+    println!("cargo:warning=OSR routing.bin uses cista read-only mmap");
+}
+
 fn resolve_source(out: &Path) -> PathBuf {
     if let Some(dir) = env::var_os("OSR_SOURCE_DIR") {
         let path = fs::canonicalize(&dir).expect("canonicalize OSR_SOURCE_DIR");
@@ -85,6 +108,7 @@ fn resolve_source(out: &Path) -> PathBuf {
             path.join("CMakeLists.txt").display()
         );
         println!("cargo:rerun-if-changed={}", path.join(".pkg").display());
+        println!("cargo:rerun-if-changed={}", path.join("src/ways.cc").display());
         let staged = out.join("osr-source");
         stage_external_source(&path, &staged);
         exclude_backend_dependencies(&staged);
@@ -222,6 +246,7 @@ fn main() {
     let root = fs::canonicalize(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))
         .expect("canonicalize crate");
     let source = resolve_source(&out);
+    use_readonly_mmap_for_routing_bin(&source);
     let include_dir = out.join("cxxbridge").join("include");
     let lib_dir = out.join("native-lib");
     fs::create_dir_all(&lib_dir).expect("create native library output");
