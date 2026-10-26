@@ -154,6 +154,9 @@ pub mod ffi {
         type MatchStore;
 
         fn open_router(data_dir: &str) -> Result<UniquePtr<Router>>;
+        /// One native graph object can be cloned as a SharedPtr and queried
+        /// concurrently. Matches and search state remain call-local.
+        fn open_shared_router(data_dir: &str) -> Result<SharedPtr<Router>>;
         fn node_count(self: &Router) -> u64;
         fn way_count(self: &Router) -> u64;
         fn has_elevations(self: &Router) -> bool;
@@ -260,6 +263,15 @@ pub mod ffi {
         ) -> Result<MapMatchResult>;
     }
 }
+
+// SAFETY: Router construction completes before it is shared. Router's C++
+// facade only offers const query methods; ways, lookup/R-tree and elevation
+// data are mapped READ-only. OSR creates Dijkstra/search and matching state
+// per call, and the only mutable MatchStore is owned exclusively by its caller.
+// No query writes to Router::Impl or to the mapped graph. Keep this contract
+// under review whenever the native OSR revision or exposed methods change.
+unsafe impl Send for ffi::Router {}
+unsafe impl Sync for ffi::Router {}
 
 /// Numeric codes used at the FFI boundary. The C++ adapter checks every code.
 #[repr(u8)]
@@ -391,6 +403,17 @@ impl ffi::RoutingOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_router_handle_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<cxx::SharedPtr<ffi::Router>>();
+    }
+
+    #[test]
+    fn shared_router_preserves_native_open_errors() {
+        assert!(ffi::open_shared_router("/osr-ffi-test-graph-does-not-exist").is_err());
+    }
 
     #[test]
     fn all_profiles_have_stable_distinct_codes() {
