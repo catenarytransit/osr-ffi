@@ -170,6 +170,10 @@ std::unique_ptr<Router> open_router(rust::Str path) {
   return std::make_unique<Router>(path);
 }
 
+std::shared_ptr<Router> open_shared_router(rust::Str path) {
+  return std::make_shared<Router>(path);
+}
+
 std::uint64_t Router::node_count() const noexcept {
   return impl_->ways_.n_nodes();
 }
