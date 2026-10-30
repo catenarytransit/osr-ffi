@@ -28,6 +28,8 @@ pub mod ffi {
         pub max_match_distance_meters: f64,
         /// > 0 overrides the default for walking/wheelchair profiles.
         pub foot_speed_meters_per_second: f32,
+        /// > 0 overrides the default for bicycle routing profiles.
+        pub bike_speed_meters_per_second: f32,
         pub has_start_time: bool,
         pub start_time_unix_seconds: i64,
         /// One-to-many: reconstruct each path and its segments when true.
@@ -134,6 +136,8 @@ pub mod ffi {
         pub reverse: bool,
         pub max_match_distance_meters: f64,
         pub foot_speed_meters_per_second: f32,
+        /// > 0 overrides the default for bicycle routing profiles.
+        pub bike_speed_meters_per_second: f32,
     }
 
     #[derive(Debug, Clone)]
@@ -339,6 +343,7 @@ impl Default for ffi::MatchOptions {
             reverse: false,
             max_match_distance_meters: 25.0,
             foot_speed_meters_per_second: 0.0,
+            bike_speed_meters_per_second: 0.0,
         }
     }
 }
@@ -370,6 +375,7 @@ impl Default for ffi::RoutingOptions {
             max_cost: 3600,
             max_match_distance_meters: 100.0,
             foot_speed_meters_per_second: 0.0,
+            bike_speed_meters_per_second: 0.0,
             has_start_time: false,
             start_time_unix_seconds: 0,
             include_segments: true,
