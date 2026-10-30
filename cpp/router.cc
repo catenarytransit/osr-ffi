@@ -51,23 +51,48 @@ osr::routing_algorithm get_algorithm(std::uint8_t code) {
   return static_cast<osr::routing_algorithm>(code);
 }
 
-osr::profile_parameters get_params(osr::search_profile profile, float speed) {
+osr::profile_parameters get_params(osr::search_profile profile, float foot_speed,
+                                   float bike_speed = 0.F) {
   auto parameters = osr::get_parameters(profile);
-  if (speed == 0.F) {
-    return parameters;
+  if ((!std::isfinite(foot_speed) || foot_speed < 0.F) ||
+      (!std::isfinite(bike_speed) || bike_speed < 0.F)) {
+    throw std::invalid_argument("speed overrides must be finite and nonnegative");
   }
-  if (!std::isfinite(speed) || speed <= 0.F) {
-    throw std::invalid_argument("walking speed must be positive and finite");
+  auto const is_bike = profile == osr::search_profile::kBike ||
+                       profile == osr::search_profile::kBikeFast ||
+                       profile == osr::search_profile::kBikeElevationLow ||
+                       profile == osr::search_profile::kBikeElevationHigh;
+  if (foot_speed > 0.F && bike_speed > 0.F) {
+    throw std::invalid_argument("only the selected profile speed may be overridden");
   }
-  if (profile == osr::search_profile::kFoot) {
-    std::get<osr::foot<false, osr::elevator_tracking>::parameters>(
-        parameters).speed_meters_per_second_ = speed;
-  } else if (profile == osr::search_profile::kWheelchair) {
-    std::get<osr::foot<true, osr::elevator_tracking>::parameters>(
-        parameters).speed_meters_per_second_ = speed;
-  } else {
-    throw std::invalid_argument(
-        "walking speed is only valid for foot/wheelchair");
+  if (foot_speed > 0.F) {
+    if (profile != osr::search_profile::kFoot &&
+        profile != osr::search_profile::kWheelchair) {
+      throw std::invalid_argument("walking speed is only valid for foot/wheelchair");
+    }
+    if (foot_speed < 0.3F || foot_speed > 10.F) {
+      throw std::invalid_argument("walking speed outside supported range");
+    }
+    std::visit([&](auto& p) {
+      using T = std::decay_t<decltype(p)>;
+      if constexpr (requires(T x) { x.speed_meters_per_second_; }) {
+        p.speed_meters_per_second_ = foot_speed;
+      }
+    }, parameters);
+  }
+  if (bike_speed > 0.F) {
+    if (!is_bike) {
+      throw std::invalid_argument("cycling speed is only valid for bicycle profiles");
+    }
+    if (bike_speed < 0.7F || bike_speed > 20.F) {
+      throw std::invalid_argument("cycling speed outside supported range");
+    }
+    std::visit([&](auto& p) {
+      using T = std::decay_t<decltype(p)>;
+      if constexpr (requires(T x) { x.speed_meters_per_second_; }) {
+        p.speed_meters_per_second_ = bike_speed;
+      }
+    }, parameters);
   }
   return parameters;
 }
@@ -193,7 +218,7 @@ RouteResult Router::one_to_one(
   validate_options(options);
   auto const profile = get_profile(options.profile);
   auto const parameters =
-      get_params(profile, options.foot_speed_meters_per_second);
+      get_params(profile, options.foot_speed_meters_per_second, options.bike_speed_meters_per_second);
   auto const& w = impl_->ways_;
   auto blocked = osr::bitvec<osr::node_idx_t>{};
   if (!blocked_ids.empty()) {
@@ -231,7 +256,7 @@ rust::Vec<RouteResult> Router::one_to_many(
   }
   auto const profile = get_profile(options.profile);
   auto const parameters =
-      get_params(profile, options.foot_speed_meters_per_second);
+      get_params(profile, options.foot_speed_meters_per_second, options.bike_speed_meters_per_second);
   auto const& w = impl_->ways_;
   auto blocked = osr::bitvec<osr::node_idx_t>{};
   if (!blocked_ids.empty()) {
@@ -315,7 +340,7 @@ void validate_match_options(MatchOptions const& o) {
       o.max_match_distance_meters <= 0.0) {
     throw std::invalid_argument("positive finite match radius required");
   }
-  (void)get_params(get_profile(o.profile), o.foot_speed_meters_per_second);
+  (void)get_params(get_profile(o.profile), o.foot_speed_meters_per_second, o.bike_speed_meters_per_second);
 }
 
 osr::bitvec<osr::node_idx_t> build_blocked(
@@ -437,7 +462,8 @@ bool same_matches(MatchOptions const& a, MatchOptions const& b) {
   return a.profile == b.profile && a.direction == b.direction &&
          a.reverse == b.reverse &&
          a.max_match_distance_meters == b.max_match_distance_meters &&
-         a.foot_speed_meters_per_second == b.foot_speed_meters_per_second;
+         a.foot_speed_meters_per_second == b.foot_speed_meters_per_second &&
+          a.bike_speed_meters_per_second == b.bike_speed_meters_per_second;
 }
 
 }  // namespace
@@ -483,7 +509,7 @@ RawMatchResult Router::lookup_match(
   auto const raw = import_raw(raw_candidates, impl_->ways_);
   auto m = osr::match_result{};
   impl_->lookup_.match(
-      get_params(p, opts.foot_speed_meters_per_second),
+      get_params(p, opts.foot_speed_meters_per_second, opts.bike_speed_meters_per_second),
       to_location(point), opts.reverse, get_direction(opts.direction),
       opts.max_match_distance_meters,
       blocked_ids.empty() ? nullptr : &blocked, p, raw, m);
@@ -512,7 +538,7 @@ rust::Vec<RouteResult> Router::route_one_to_many_matched(
   for (auto const& c : destinations) targets.push_back(to_location(c));
   auto const blocked = build_blocked(impl_->ways_, blocked_ids);
   auto const states = osr::route_one_to_many(
-      get_params(get_profile(options.profile), options.foot_speed_meters_per_second),
+      get_params(get_profile(options.profile), options.foot_speed_meters_per_second, options.bike_speed_meters_per_second),
       impl_->ways_, impl_->lookup_, get_profile(options.profile),
       to_location(origin), targets,
       origin_native[osr::match_idx_t{0U}], targets_native,
@@ -548,7 +574,7 @@ std::uint32_t Router::append_lookup_match(
   auto const loc = to_location(point);
   auto const raw = import_raw(raw_candidates, impl_->ways_);
   impl_->lookup_.match(
-      get_params(get_profile(opts.profile), opts.foot_speed_meters_per_second),
+      get_params(get_profile(opts.profile), opts.foot_speed_meters_per_second, opts.bike_speed_meters_per_second),
       loc, opts.reverse, get_direction(opts.direction),
       opts.max_match_distance_meters, nullptr,
       get_profile(opts.profile), raw, store.impl_->matches_);
@@ -587,7 +613,9 @@ rust::Vec<RouteResult> Router::route_one_to_many_cached(
       a.direction != options.direction || b.direction != options.direction ||
       a.reverse || !b.reverse ||
       a.foot_speed_meters_per_second != options.foot_speed_meters_per_second ||
-      b.foot_speed_meters_per_second != options.foot_speed_meters_per_second) {
+      b.foot_speed_meters_per_second != options.foot_speed_meters_per_second ||
+       a.bike_speed_meters_per_second != options.bike_speed_meters_per_second ||
+       b.bike_speed_meters_per_second != options.bike_speed_meters_per_second) {
     throw std::invalid_argument("cached origin/destination matching settings differ from routing");
   }
   auto to = std::vector<osr::location>{};
@@ -601,7 +629,7 @@ rust::Vec<RouteResult> Router::route_one_to_many_cached(
     matches.append(destinations.impl_->matches_, osr::match_idx_t{idx});
   }
   auto const states = osr::route_one_to_many(
-      get_params(get_profile(options.profile), options.foot_speed_meters_per_second),
+      get_params(get_profile(options.profile), options.foot_speed_meters_per_second, options.bike_speed_meters_per_second),
       impl_->ways_, impl_->lookup_, get_profile(options.profile),
       origins.impl_->locations_[origin_index], to,
       origins.impl_->matches_[osr::match_idx_t{origin_index}], matches,
