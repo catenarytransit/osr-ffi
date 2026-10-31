@@ -405,7 +405,9 @@ PlatformLevelMatch Router::match_platform(
     // and scores distance against identifying GTFS metadata.
     auto const name_size = static_cast<double>(name.size());
     auto exact_id = false, name_number = false, track_number = false;
-    auto exact_name = false, contains_id = false, code_bonus = 0.0;
+    bool exact_name = false;
+    bool contains_id = false;
+    double code_bonus = 0.0;
     auto route_bonus = 0.0;
     auto first_code = true;
     for (auto const& candidate : pl.platform_names_[idx]) {
