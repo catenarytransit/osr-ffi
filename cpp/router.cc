@@ -16,6 +16,7 @@
 #include "osr/location.h"
 #include "osr/lookup.h"
 #include "osr/platforms.h"
+#include "utl/overloaded.h"
 #include "osr/routing/map_matching.h"
 #include "osr/routing/parameters.h"
 #include "osr/routing/route.h"
@@ -448,7 +449,7 @@ PlatformLevelMatch Router::match_platform(
         + code_bonus + route_bonus + (is_way ? 20.0 : 0.0)
         + (lvl.has_level() && lvl.to_float() != 0.0F ? 5.0 : 0.0);
     auto const score = dist - bonus;
-    if (score > best_score || (score == best_score && to_idx(idx) >= out.platform_index)) return;
+    if (score > best_score || (score == best_score && cista::to_idx(idx) >= out.platform_index)) return;
     // MOTIS rejects a selected non-ground platform if it has no reachable
     // foot way on that level within max_matching_distance.
     if (lvl.has_level() && lvl.to_float() != 0.0F &&
