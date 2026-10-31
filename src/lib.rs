@@ -75,6 +75,8 @@ pub mod ffi {
         pub found: bool,
         pub level: f32,
         pub distance_meters: f64,
+        pub score: f64,
+        pub platform_index: u32,
     }
 
     #[derive(Debug, Clone)]
@@ -181,6 +183,20 @@ pub mod ffi {
             point: &Coordinate,
             stop_name: &str,
             max_distance_meters: f64,
+        ) -> Result<PlatformLevelMatch>;
+
+        /// MOTIS-style GTFS stop -> OSM platform resolver, including platform
+        /// ways, node and relation members, route labels, stop IDs and codes.
+        /// route_names is a UTF-8 list delimited by ASCII unit separator.
+        /// Return found=false for unmatched/unwalkable platform levels.
+        fn match_platform(
+            self: &Router,
+            point: &Coordinate,
+            stop_id: &str,
+            stop_name: &str,
+            platform_code: &str,
+            route_names: &str,
+            max_matching_distance_meters: f64,
         ) -> Result<PlatformLevelMatch>;
 
         /// All native search profiles, both single-destination algorithms,
