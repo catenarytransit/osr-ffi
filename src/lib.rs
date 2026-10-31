@@ -68,6 +68,17 @@ pub mod ffi {
         pub segments: Vec<PathSegment>,
     }
 
+    /// A conservative platform-name/geometry match in the current OSR graph.
+    /// `level` is only meaningful when `found` is true.
+    #[derive(Debug, Clone, Copy)]
+    pub struct PlatformLevelMatch {
+        pub found: bool,
+        pub level: f32,
+        pub distance_meters: f64,
+        pub score: f64,
+        pub platform_index: u32,
+    }
+
     #[derive(Debug, Clone)]
     pub struct SnapCandidate {
         pub osm_way_id: i64,
@@ -164,6 +175,29 @@ pub mod ffi {
         fn node_count(self: &Router) -> u64;
         fn way_count(self: &Router) -> u64;
         fn has_elevations(self: &Router) -> bool;
+
+        /// Query optional `-p` OSM platform metadata for GTFS stop level.
+        /// Returns found=false when metadata is absent or name/geometry disagrees.
+        fn platform_level(
+            self: &Router,
+            point: &Coordinate,
+            stop_name: &str,
+            max_distance_meters: f64,
+        ) -> Result<PlatformLevelMatch>;
+
+        /// MOTIS-style GTFS stop -> OSM platform resolver, including platform
+        /// ways, node and relation members, route labels, stop IDs and codes.
+        /// route_names is a UTF-8 list delimited by ASCII unit separator.
+        /// Return found=false for unmatched/unwalkable platform levels.
+        fn match_platform(
+            self: &Router,
+            point: &Coordinate,
+            stop_id: &str,
+            stop_name: &str,
+            platform_code: &str,
+            route_names: &str,
+            max_matching_distance_meters: f64,
+        ) -> Result<PlatformLevelMatch>;
 
         /// All native search profiles, both single-destination algorithms,
         /// forward/backward direction, level, time and matching options.
