@@ -1,6 +1,8 @@
 #include "include/router.h"
 #include "osr-ffi/src/lib.rs.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -13,6 +15,7 @@
 #include "osr/elevation_storage.h"
 #include "osr/location.h"
 #include "osr/lookup.h"
+#include "osr/platforms.h"
 #include "osr/routing/map_matching.h"
 #include "osr/routing/parameters.h"
 #include "osr/routing/route.h"
@@ -178,11 +181,18 @@ struct Router::Impl {
   osr::ways ways_;
   osr::lookup lookup_;
   std::unique_ptr<osr::elevation_storage> elevations_;
+  std::unique_ptr<osr::platforms> platforms_;
 
   explicit Impl(std::filesystem::path const& dir)
       : ways_{dir, cista::mmap::protection::READ},
         lookup_{ways_, dir, cista::mmap::protection::READ},
-        elevations_{osr::elevation_storage::try_open(dir)} {}
+        elevations_{osr::elevation_storage::try_open(dir)} {
+    if (std::filesystem::exists(dir / "platform_ref_index.bin") &&
+        std::filesystem::exists(dir / "platform_names_data.bin")) {
+      platforms_ = std::make_unique<osr::platforms>(dir, cista::mmap::protection::READ);
+      platforms_->build_rtree(ways_);
+    }
+  }
 };
 
 Router::Router(rust::Str dir)
@@ -209,6 +219,71 @@ std::uint64_t Router::way_count() const noexcept {
 
 bool Router::has_elevations() const noexcept {
   return impl_->elevations_ != nullptr;
+}
+
+PlatformLevelMatch Router::platform_level(
+    Coordinate const& point, rust::Str stop_name,
+    double max_distance_meters) const {
+  auto result = PlatformLevelMatch{};
+  if (!std::isfinite(max_distance_meters) ||
+      max_distance_meters <= 0.0 || max_distance_meters > 500.0) {
+    throw std::invalid_argument("platform radius must be in (0, 500] meters");
+  }
+  auto const query = to_location(point);
+  if (!impl_->platforms_ || stop_name.empty()) return result;
+
+  auto normalize = [](std::string_view input) {
+    std::string out;
+    bool space = true;
+    for (unsigned char c : input) {
+      if (c < 128 && std::isalnum(c)) {
+        out.push_back(static_cast<char>(std::tolower(c)));
+        space = false;
+      } else if (!space) {
+        out.push_back(' ');
+        space = true;
+      }
+    }
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+  };
+  auto const wanted = normalize(
+      std::string_view{stop_name.data(), stop_name.size()});
+  if (wanted.size() < 4U) return result;
+  auto best_dist = max_distance_meters;
+  auto const& pl = *impl_->platforms_;
+  pl.find(query.pos_, [&](osr::platform_idx_t const idx) {
+    auto const& refs = pl.platform_ref_.at(idx);
+    if (refs.empty()) return;
+    bool named = false;
+    for (auto const& candidate : pl.platform_names_[idx]) {
+      auto const actual = normalize(candidate.view());
+      if (actual == wanted ||
+          (actual.size() >= 7U && wanted.size() >= 7U &&
+           (actual.find(wanted) != std::string::npos ||
+            wanted.find(actual) != std::string::npos))) {
+        named = true;
+        break;
+      }
+    }
+    if (!named) return;
+
+    // Only support single-node platforms for now. Matching an arbitrary
+    // corner of a large platform polygon would misrepresent its proximity.
+    auto const ref = refs.front();
+    if (refs.size() != 1U || osr::is_way(ref)) return;
+    auto const node = std::get<osr::node_idx_t>(osr::to_ref(ref));
+    auto const pos = pl.get_node_pos(node).as_latlng();
+    auto const dist = geo::distance(query.pos_, pos);
+    if (dist >= best_dist) return;
+    auto const level = pl.get_level(impl_->ways_, idx);
+    if (!level.has_level()) return;
+    best_dist = dist;
+    result.found = true;
+    result.level = level.to_float();
+    result.distance_meters = dist;
+  });
+  return result;
 }
 
 RouteResult Router::one_to_one(
