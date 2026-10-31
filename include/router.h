@@ -9,6 +9,7 @@ struct Coordinate;
 struct RoutingOptions;
 struct RouteResult;
 struct SnapCandidate;
+struct PlatformLevelMatch;
 struct MapMatchResult;
 struct RawWayCandidate;
 struct RawMatchResult;
@@ -40,6 +41,11 @@ public:
   std::uint64_t node_count() const noexcept;
   std::uint64_t way_count() const noexcept;
   bool has_elevations() const noexcept;
+
+  // Resolve a named GTFS stop against extracted OSM platform geometry.
+  // Unavailable platform metadata or no reliable name match returns found=false.
+  PlatformLevelMatch platform_level(
+      Coordinate const&, rust::Str stop_name, double max_distance_meters) const;
 
   RouteResult one_to_one(Coordinate const&, Coordinate const&,
                          RoutingOptions const&,
