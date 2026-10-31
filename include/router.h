@@ -46,6 +46,12 @@ public:
   // Unavailable platform metadata or no reliable name match returns found=false.
   PlatformLevelMatch platform_level(
       Coordinate const&, rust::Str stop_name, double max_distance_meters) const;
+  // MOTIS-style GTFS -> OSM platform matching, including ways and relation
+  // members and GTFS stop/route/platform-code similarity.
+  PlatformLevelMatch match_platform(
+      Coordinate const&, rust::Str stop_id, rust::Str stop_name,
+      rust::Str platform_code, rust::Str route_names,
+      double max_matching_distance_meters) const;
 
   RouteResult one_to_one(Coordinate const&, Coordinate const&,
                          RoutingOptions const&,
