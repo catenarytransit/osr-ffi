@@ -286,6 +286,184 @@ PlatformLevelMatch Router::platform_level(
   return result;
 }
 
+
+namespace {
+std::string_view as_view(rust::Str s) {
+  return {s.data(), s.size()};
+}
+bool digit(char c) { return c >= '0' && c <= '9'; }
+template <typename Fn>
+void every_number(std::string_view text, Fn&& fn) {
+  for (auto i = std::size_t{0}; i < text.size();) {
+    if (!digit(text[i])) { ++i; continue; }
+    auto j = i + 1U;
+    while (j < text.size() && digit(text[j])) ++j;
+    fn(text.substr(i, j - i));
+    i = j;
+  }
+}
+bool number_overlap(std::string_view a, std::string_view b) {
+  auto yes = false;
+  every_number(a, [&](auto x) {
+    every_number(b, [&](auto y) { if (x == y) yes = true; });
+  });
+  return yes;
+}
+std::optional<std::string_view> trailing_track(std::string_view s) {
+  if (s.empty() || !digit(s.back())) return std::nullopt;
+  auto pos = s.size();
+  while (pos > 0U && digit(s[pos - 1U])) --pos;
+  return s.substr(pos);
+}
+std::optional<geo::latlng> platform_center(
+    osr::platforms const& pl, osr::ways const& w,
+    osr::platform_idx_t index) {
+  auto lat = 0.0, lon = 0.0;
+  auto count = std::size_t{0};
+  auto visit = [&](geo::latlng p) {
+    lat += p.lat(); lon += p.lng(); ++count;
+  };
+  for (auto ref : pl.platform_ref_[index]) {
+    std::visit(utl::overloaded{
+      [&](osr::node_idx_t node) { visit(pl.get_node_pos(node).as_latlng()); },
+      [&](osr::way_idx_t way) {
+        for (auto const& p : w.way_polylines_[way]) visit(p);
+      }
+    }, osr::to_ref(ref));
+  }
+  if (count == 0U) return std::nullopt;
+  auto const average = geo::latlng{lat / count, lon / count};
+  auto const scale = geo::approx_distance_lng_degrees(average);
+  auto best = geo::latlng{};
+  auto distance = std::numeric_limits<double>::max();
+  auto add = [&](geo::latlng p, double square_distance) {
+    if (square_distance < distance) {
+      distance = square_distance;
+      best = p;
+    }
+  };
+  for (auto ref : pl.platform_ref_[index]) {
+    std::visit(utl::overloaded{
+      [&](osr::node_idx_t node) {
+        auto p = pl.get_node_pos(node).as_latlng();
+        add(p, geo::approx_squared_distance(p, average, scale));
+      },
+      [&](osr::way_idx_t way) {
+        auto const& polyline = w.way_polylines_[way];
+        for (auto i = std::size_t{1}; i < polyline.size(); ++i) {
+          auto const [p, squared] =
+              geo::approx_closest_on_segment(average, polyline[i-1], polyline[i], scale);
+          add(p, squared);
+        }
+      }
+    }, osr::to_ref(ref));
+  }
+  return distance == std::numeric_limits<double>::max()
+      ? std::nullopt : std::optional{best};
+}
+bool walkable_on_level(osr::ways const& w, osr::lookup const& lookup,
+                       geo::latlng pos, osr::level_t lvl,
+                       double max_distance) {
+  auto const p = osr::search_profile::kFoot;
+  auto m = osr::match_result{};
+  lookup.match(osr::get_parameters(p), osr::location{pos, lvl}, false,
+               osr::direction::kForward, max_distance, nullptr, p, {}, m);
+  for (auto d : m[osr::match_idx_t{0U}].dist_to_way_) {
+    if (d <= max_distance) return true;
+  }
+  return false;
+}
+}  // namespace
+
+PlatformLevelMatch Router::match_platform(
+    Coordinate const& point, rust::Str stop_id, rust::Str stop_name,
+    rust::Str platform_code, rust::Str route_names,
+    double max_matching_distance_meters) const {
+  if (!std::isfinite(max_matching_distance_meters) ||
+      max_matching_distance_meters <= 0.0 ||
+      max_matching_distance_meters > 500.0) {
+    throw std::invalid_argument("platform matching distance must be (0,500]");
+  }
+  auto out = PlatformLevelMatch{};
+  if (!impl_->platforms_) return out;
+  auto const location = to_location(point);
+  auto const& pl = *impl_->platforms_;
+  auto const& w = impl_->ways_;
+  auto const id = as_view(stop_id);
+  auto const name = as_view(stop_name);
+  auto const code = as_view(platform_code);
+  auto const routes = as_view(route_names);
+  auto best_score = std::numeric_limits<double>::infinity();
+
+  pl.find(location.pos_, [&](osr::platform_idx_t idx) {
+    if (pl.platform_ref_[idx].empty()) return;
+    auto center = platform_center(pl, w, idx);
+    if (!center) return;
+    auto const dist = geo::distance(*center, location.pos_);
+    // MOTIS searches OSM platforms within its platform spatial index
+    // and scores distance against identifying GTFS metadata.
+    auto const name_size = static_cast<double>(name.size());
+    auto exact_id = false, name_number = false, track_number = false;
+    auto exact_name = false, contains_id = false, code_bonus = 0.0;
+    auto route_bonus = 0.0;
+    auto first_code = true;
+    for (auto const& candidate : pl.platform_names_[idx]) {
+      auto const s = candidate.view();
+      exact_id |= s == id && !id.empty();
+      name_number |= number_overlap(s, name);
+      if (auto track = trailing_track(id); track) {
+        track_number |= number_overlap(s, *track);
+      }
+      exact_name |= s == name && !name.empty();
+      contains_id |= !id.empty() && s.find(id) != std::string_view::npos;
+      if (!code.empty() && s == code) {
+        code_bonus += first_code ? 50.0 : 15.0;
+        first_code = false;
+      }
+      for (auto at = std::size_t{0}; at <= routes.size();) {
+        auto end = routes.find('\x1f', at);
+        if (end == std::string_view::npos) end = routes.size();
+        auto route = routes.substr(at, end - at);
+        if (!route.empty()) {
+          if (route == s) route_bonus += 20.0;
+          for (auto i = std::size_t{0}; i < s.size();) {
+            auto j = s.find(' ', i);
+            if (j == std::string_view::npos) j = s.size();
+            if (route == s.substr(i, j - i)) route_bonus += 20.0;
+            i = j + 1;
+          }
+        }
+        if (end == routes.size()) break;
+        at = end + 1;
+      }
+    }
+    auto const refs = pl.platform_ref_[idx];
+    auto const is_way = osr::is_way(refs.front());
+    auto const lvl = pl.get_level(w, idx);
+    auto const bonus = (exact_id ? std::max(0.0,200.0-name_size) : 0.0)
+        + (name_number ? std::max(0.0,140.0-name_size) : 0.0)
+        + (track_number ? std::max(0.0,20.0-name_size) : 0.0)
+        + (exact_name ? std::max(0.0,15.0-name_size) : 0.0)
+        + (contains_id ? std::max(0.0,5.0-name_size) : 0.0)
+        + code_bonus + route_bonus + (is_way ? 20.0 : 0.0)
+        + (lvl.has_level() && lvl.to_float() != 0.0F ? 5.0 : 0.0);
+    auto const score = dist - bonus;
+    if (score > best_score || (score == best_score && to_idx(idx) >= out.platform_index)) return;
+    // MOTIS rejects a selected non-ground platform if it has no reachable
+    // foot way on that level within max_matching_distance.
+    if (lvl.has_level() && lvl.to_float() != 0.0F &&
+        !walkable_on_level(w, impl_->lookup_, location.pos_, lvl,
+                           max_matching_distance_meters)) return;
+    best_score = score;
+    out.found = true;
+    out.level = lvl.has_level() ? lvl.to_float() : 0.0F;
+    out.distance_meters = dist;
+    out.score = score;
+    out.platform_index = to_idx(idx);
+  });
+  return out;
+}
+
 RouteResult Router::one_to_one(
     Coordinate const& from, Coordinate const& to,
     RoutingOptions const& options,
