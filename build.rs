@@ -318,6 +318,45 @@ osr_ffi_fix_osm("include/osm/assembler/state.h"
     "  problem_reporter problem_reporter;"
     "  osm::problem_reporter problem_reporter;")
 
+# Add private writable mapping to the pinned cista dependency.
+function(osr_ffi_cista_replace old new)
+  set(path "${CMAKE_SOURCE_DIR}/deps/cista/include/cista/mmap.h")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "Pinned cista mmap.h unavailable: ${path}")
+  endif()
+  file(READ "${path}" contents)
+  string(FIND "${contents}" "${old}" pos)
+  if(pos EQUAL -1)
+    string(FIND "${contents}" "${new}" already)
+    if(already EQUAL -1)
+      message(FATAL_ERROR "Unexpected cista source: ${old}")
+    endif()
+    return()
+  endif()
+  string(REPLACE "${old}" "${new}" updated "${contents}")
+  file(WRITE "${path}" "${updated}")
+endfunction()
+osr_ffi_cista_replace(
+  "    TMPFILE  // requires directory path"
+  "    TMPFILE,  // requires directory path
+    COPY_ON_WRITE")
+osr_ffi_cista_replace(
+  "      case protection::READ: return \"r\";"
+  "      case protection::READ:
+      case protection::COPY_ON_WRITE: return \"r\";")
+osr_ffi_cista_replace(
+  "prot_ == protection::READ ? PAGE_READONLY : PAGE_READWRITE"
+  "prot_ == protection::READ ? PAGE_READONLY : prot_ == protection::COPY_ON_WRITE ? PAGE_WRITECOPY : PAGE_READWRITE")
+osr_ffi_cista_replace(
+  "prot_ == protection::READ ? FILE_MAP_READ : FILE_MAP_WRITE"
+  "prot_ == protection::READ ? FILE_MAP_READ : prot_ == protection::COPY_ON_WRITE ? FILE_MAP_COPY : FILE_MAP_WRITE")
+osr_ffi_cista_replace(
+  "               MAP_SHARED, f_.fd(), OFFSET);"
+  "               prot_ == protection::COPY_ON_WRITE ? MAP_PRIVATE : MAP_SHARED, f_.fd(), OFFSET);")
+osr_ffi_cista_replace(
+  "if (prot_ == protection::READ) {"
+  "if (prot_ == protection::READ || prot_ == protection::COPY_ON_WRITE) {")
+
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
     "${OSR_FFI_ROOT}"
