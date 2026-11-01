@@ -58,3 +58,53 @@ fn concurrent_shared_graph_queries() {
         }
     });
 }
+
+#[test]
+fn metadata_load_modes_agree() {
+    use osr_ffi::ffi::{MetadataLoadMode, RouterOpenOptions};
+    let Ok(data_dir) = std::env::var("OSR_TEST_DATA_DIR") else {
+        eprintln!("skipping storage parity: set OSR_TEST_DATA_DIR");
+        return;
+    };
+    let a = ffi::open_shared_router_with_options(
+        &data_dir,
+        &RouterOpenOptions {
+            metadata_load_mode: MetadataLoadMode::ReadIntoMemory,
+        },
+    )
+    .expect("open in-memory graph");
+    let b = ffi::open_shared_router_with_options(
+        &data_dir,
+        &RouterOpenOptions {
+            metadata_load_mode: MetadataLoadMode::MmapPrivate,
+        },
+    )
+    .expect("open mapped graph");
+    let a = a.as_ref().unwrap();
+    let b = b.as_ref().unwrap();
+    assert_eq!(a.metadata_load_mode(), MetadataLoadMode::ReadIntoMemory);
+    assert_eq!(b.metadata_load_mode(), MetadataLoadMode::MmapPrivate);
+    assert_eq!(a.node_count(), b.node_count());
+    assert_eq!(a.way_count(), b.way_count());
+    if let (Ok(lat), Ok(lon)) = (
+        std::env::var("OSR_TEST_LATITUDE"),
+        std::env::var("OSR_TEST_LONGITUDE"),
+    ) {
+        let p = ffi::Coordinate::outdoor(lat.parse().unwrap(), lon.parse().unwrap());
+        let am = a.get_raw_match(&p, 100.0).expect("heap match");
+        let bm = b.get_raw_match(&p, 100.0).expect("mmap match");
+        assert_eq!(format!("{am:?}"), format!("{bm:?}"));
+        let opts = ffi::RoutingOptions {
+            max_cost: 1200,
+            include_segments: false,
+            ..ffi::RoutingOptions::default().profile(Profile::Foot)
+        };
+        let ar = a
+            .one_to_many(&p, std::slice::from_ref(&p), &opts, &[])
+            .unwrap();
+        let br = b
+            .one_to_many(&p, std::slice::from_ref(&p), &opts, &[])
+            .unwrap();
+        assert_eq!(format!("{ar:?}"), format!("{br:?}"));
+    }
+}

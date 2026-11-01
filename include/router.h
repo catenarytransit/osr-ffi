@@ -14,6 +14,8 @@ struct MapMatchResult;
 struct RawWayCandidate;
 struct RawMatchResult;
 struct MatchOptions;
+struct RouterOpenOptions;
+enum class MetadataLoadMode : std::uint8_t;
 class Router;
 
 // Complete C++ type required by cxx for UniquePtr<MatchStore>.
@@ -34,7 +36,9 @@ private:
 class Router {
 public:
   explicit Router(rust::Str);
+  Router(rust::Str, RouterOpenOptions const&);
   ~Router();
+  MetadataLoadMode metadata_load_mode() const noexcept;
   Router(Router const&) = delete;
   Router& operator=(Router const&) = delete;
 
@@ -96,4 +100,6 @@ private:
 std::unique_ptr<Router> open_router(rust::Str);
 // Shares one immutable, read-only graph across concurrent routing threads.
 std::shared_ptr<Router> open_shared_router(rust::Str);
+std::unique_ptr<Router> open_router_with_options(rust::Str, RouterOpenOptions const&);
+std::shared_ptr<Router> open_shared_router_with_options(rust::Str, RouterOpenOptions const&);
 }  // namespace catenary_osr

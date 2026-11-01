@@ -162,6 +162,19 @@ pub mod ffi {
         pub computation_milliseconds: u64,
     }
 
+    /// How routing.bin and rtree_meta.bin are read when the router opens.
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MetadataLoadMode {
+        ReadIntoMemory = 0,
+        MmapPrivate = 1,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct RouterOpenOptions {
+        pub metadata_load_mode: MetadataLoadMode,
+    }
+
     unsafe extern "C++" {
         include!("include/router.h");
 
@@ -172,6 +185,15 @@ pub mod ffi {
         /// One native graph object can be cloned as a SharedPtr and queried
         /// concurrently. Matches and search state remain call-local.
         fn open_shared_router(data_dir: &str) -> Result<SharedPtr<Router>>;
+        fn open_router_with_options(
+            data_dir: &str,
+            options: &RouterOpenOptions,
+        ) -> Result<UniquePtr<Router>>;
+        fn open_shared_router_with_options(
+            data_dir: &str,
+            options: &RouterOpenOptions,
+        ) -> Result<SharedPtr<Router>>;
+        fn metadata_load_mode(self: &Router) -> MetadataLoadMode;
         fn node_count(self: &Router) -> u64;
         fn way_count(self: &Router) -> u64;
         fn has_elevations(self: &Router) -> bool;
@@ -299,6 +321,14 @@ pub mod ffi {
             foot_speed_meters_per_second: f32,
             blocked_osm_nodes: &[i64],
         ) -> Result<MapMatchResult>;
+    }
+}
+
+impl Default for ffi::RouterOpenOptions {
+    fn default() -> Self {
+        Self {
+            metadata_load_mode: ffi::MetadataLoadMode::ReadIntoMemory,
+        }
     }
 }
 
@@ -443,6 +473,14 @@ impl ffi::RoutingOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_mode_defaults_to_read() {
+        assert_eq!(
+            ffi::RouterOpenOptions::default().metadata_load_mode,
+            ffi::MetadataLoadMode::ReadIntoMemory
+        );
+    }
 
     #[test]
     fn shared_router_handle_is_send_and_sync() {

@@ -232,3 +232,26 @@ overlay creation, arbitrary `Profile` template specializations, custom
 `sharing_data` and unrestricted mutable `ways` access are not exposed.
 High-level repeated-query precomputed `match_result` handles and
 `route_one_to_many` reconstruction state are follow-on optimization APIs.
+
+
+### Selective runtime metadata mapping
+
+The original `open_router` and `open_shared_router` functions continue to
+load `routing.bin` and `rtree_meta.bin` into heap memory. To choose
+copy-on-write private mmap for **both** files at runtime:
+
+```rust
+use osr_ffi::ffi::{self, MetadataLoadMode, RouterOpenOptions};
+
+let router = ffi::open_shared_router_with_options(
+    "/srv/osr/europe",
+    &RouterOpenOptions { metadata_load_mode: MetadataLoadMode::MmapPrivate },
+)?;
+```
+
+`ReadIntoMemory` preserves the existing behavior. `MmapPrivate` uses private,
+writable mapped pages for cista raw-pointer relocation without changing the
+files on disk. `routing.bin` retains its mapping for the router lifetime;
+`rtree_meta.bin` is copied by value from its temporary mapping.
+All other existing read-only OSR mmap files remain unchanged.
+The pinned OSR and cista sources are adapted by `build.rs` inside `OUT_DIR`.

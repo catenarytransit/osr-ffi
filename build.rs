@@ -72,6 +72,89 @@ fn exclude_backend_dependencies(source: &Path) {
     }
 }
 
+fn replace_staged(root: &Path, path: &str, from: &str, to: &str) {
+    let file = root.join(path);
+    let old = fs::read_to_string(&file).expect("staged OSR source");
+    if old.contains(to) {
+        return;
+    }
+    assert_eq!(
+        old.matches(from).count(),
+        1,
+        "OSR patch anchor not found: {}",
+        path
+    );
+    fs::write(file, old.replacen(from, to, 1)).expect("write staged OSR patch");
+}
+
+fn patch_osr_loading(root: &Path) {
+    replace_staged(
+        root,
+        "include/osr/ways.h",
+        "ways(std::filesystem::path, cista::mmap::protection);",
+        "ways(std::filesystem::path, cista::mmap::protection, bool = false);",
+    );
+    replace_staged(
+        root,
+        "include/osr/ways.h",
+        "static cista::wrapped<routing> read(std::filesystem::path const&);",
+        "static cista::wrapped<routing> read(std::filesystem::path const&, bool = false);",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "#include \"osr/ways.h\"",
+        "#include \"osr/ways.h\"\n#include \"osr/ffi_metadata_loading.h\"",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "ways::ways(std::filesystem::path p, cista::mmap::protection const mode)",
+        "ways::ways(std::filesystem::path p, cista::mmap::protection const mode, bool const mmap_meta)",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "? routing::read(p_)",
+        "? routing::read(p_, mmap_meta)",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "std::filesystem::path const& p) {\n  return cista::read<ways::routing>(p / \"routing.bin\");",
+        "std::filesystem::path const& p, bool const mmap_meta) {\n  return mmap_meta ? ffi_metadata_loading::read_private<ways::routing>(p / \"routing.bin\") : cista::read<ways::routing>(p / \"routing.bin\");",
+    );
+    replace_staged(
+        root,
+        "include/osr/lookup.h",
+        "lookup(ways const&, std::filesystem::path, cista::mmap::protection);",
+        "lookup(ways const&, std::filesystem::path, cista::mmap::protection, bool = false);",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "#include \"osr/lookup.h\"",
+        "#include \"osr/lookup.h\"\n#include \"osr/ffi_metadata_loading.h\"",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "cista::mmap::protection mode)\n    : p_{std::move(p)},",
+        "cista::mmap::protection mode, bool const mmap_meta)\n    : p_{std::move(p)},",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "? *cista::read<cista::mm_rtree<way_idx_t>::meta>(\n                       p_ / \"rtree_meta.bin\")",
+        "? (mmap_meta ? ffi_metadata_loading::read_value<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\") : *cista::read<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\"))",
+    );
+    fs::write(
+        root.join("include/osr/ffi_metadata_loading.h"),
+        include_str!("patches/ffi_metadata_loading.h"),
+    )
+    .expect("staged OSR mapper");
+}
+
 fn resolve_source(out: &Path) -> PathBuf {
     if let Some(dir) = env::var_os("OSR_SOURCE_DIR") {
         let path = fs::canonicalize(&dir).expect("canonicalize OSR_SOURCE_DIR");
@@ -88,6 +171,7 @@ fn resolve_source(out: &Path) -> PathBuf {
         let staged = out.join("osr-source");
         stage_external_source(&path, &staged);
         exclude_backend_dependencies(&staged);
+        patch_osr_loading(&staged);
         return staged;
     }
 
@@ -165,6 +249,7 @@ fn resolve_source(out: &Path) -> PathBuf {
         "OSR checkout missing CMakeLists.txt"
     );
     exclude_backend_dependencies(&path);
+    patch_osr_loading(&path);
     path
 }
 
@@ -292,6 +377,45 @@ osr_ffi_fix_osm("include/osm/assembler/state.h"
 osr_ffi_fix_osm("include/osm/assembler/state.h"
     "  problem_reporter problem_reporter;"
     "  osm::problem_reporter problem_reporter;")
+
+# Add private writable mapping to the pinned cista dependency.
+function(osr_ffi_cista_replace old new)
+  set(path "${CMAKE_SOURCE_DIR}/deps/cista/include/cista/mmap.h")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "Pinned cista mmap.h unavailable: ${path}")
+  endif()
+  file(READ "${path}" contents)
+  string(FIND "${contents}" "${old}" pos)
+  if(pos EQUAL -1)
+    string(FIND "${contents}" "${new}" already)
+    if(already EQUAL -1)
+      message(FATAL_ERROR "Unexpected cista source: ${old}")
+    endif()
+    return()
+  endif()
+  string(REPLACE "${old}" "${new}" updated "${contents}")
+  file(WRITE "${path}" "${updated}")
+endfunction()
+osr_ffi_cista_replace(
+  "    TMPFILE  // requires directory path"
+  "    TMPFILE,  // requires directory path
+    COPY_ON_WRITE")
+osr_ffi_cista_replace(
+  "      case protection::READ: return \"r\";"
+  "      case protection::READ:
+      case protection::COPY_ON_WRITE: return \"r\";")
+osr_ffi_cista_replace(
+  "prot_ == protection::READ ? PAGE_READONLY : PAGE_READWRITE"
+  "prot_ == protection::READ ? PAGE_READONLY : prot_ == protection::COPY_ON_WRITE ? PAGE_WRITECOPY : PAGE_READWRITE")
+osr_ffi_cista_replace(
+  "prot_ == protection::READ ? FILE_MAP_READ : FILE_MAP_WRITE"
+  "prot_ == protection::READ ? FILE_MAP_READ : prot_ == protection::COPY_ON_WRITE ? FILE_MAP_COPY : FILE_MAP_WRITE")
+osr_ffi_cista_replace(
+  "               MAP_SHARED, f_.fd(), OFFSET);"
+  "               prot_ == protection::COPY_ON_WRITE ? MAP_PRIVATE : MAP_SHARED, f_.fd(), OFFSET);")
+osr_ffi_cista_replace(
+  "if (prot_ == protection::READ) {"
+  "if (prot_ == protection::READ || prot_ == protection::COPY_ON_WRITE) {")
 
 add_library(catenary_osr_bridge SHARED "${OSR_FFI_ROOT}/cpp/router.cc")
 target_include_directories(catenary_osr_bridge PRIVATE
