@@ -179,14 +179,18 @@ RouteResult to_result(osr::ways const& w,
 }  // namespace
 
 struct Router::Impl {
+  MetadataLoadMode load_mode_;
   osr::ways ways_;
   osr::lookup lookup_;
   std::unique_ptr<osr::elevation_storage> elevations_;
   std::unique_ptr<osr::platforms> platforms_;
 
-  explicit Impl(std::filesystem::path const& dir)
-      : ways_{dir, cista::mmap::protection::READ},
-        lookup_{ways_, dir, cista::mmap::protection::READ},
+  explicit Impl(std::filesystem::path const& dir, MetadataLoadMode const load_mode)
+      : load_mode_{load_mode},
+        ways_{dir, cista::mmap::protection::READ,
+              load_mode == MetadataLoadMode::MmapPrivate},
+        lookup_{ways_, dir, cista::mmap::protection::READ,
+                load_mode == MetadataLoadMode::MmapPrivate},
         elevations_{osr::elevation_storage::try_open(dir)} {
     if (std::filesystem::exists(dir / "platform_ref_index.bin") &&
         std::filesystem::exists(dir / "platform_names_data.bin")) {
@@ -198,9 +202,19 @@ struct Router::Impl {
 
 Router::Router(rust::Str dir)
     : impl_{std::make_unique<Impl>(
-          std::filesystem::path{std::string(dir.data(), dir.size())})} {}
+          std::filesystem::path{std::string(dir.data(), dir.size())},
+          MetadataLoadMode::ReadIntoMemory)} {}
+
+Router::Router(rust::Str dir, RouterOpenOptions const& options)
+    : impl_{std::make_unique<Impl>(
+          std::filesystem::path{std::string(dir.data(), dir.size())},
+          options.metadata_load_mode)} {}
 
 Router::~Router() = default;
+
+MetadataLoadMode Router::metadata_load_mode() const noexcept {
+  return impl_->load_mode_;
+}
 
 std::unique_ptr<Router> open_router(rust::Str path) {
   return std::make_unique<Router>(path);
@@ -208,6 +222,24 @@ std::unique_ptr<Router> open_router(rust::Str path) {
 
 std::shared_ptr<Router> open_shared_router(rust::Str path) {
   return std::make_shared<Router>(path);
+}
+
+std::unique_ptr<Router> open_router_with_options(
+    rust::Str path, RouterOpenOptions const& options) {
+  if (options.metadata_load_mode != MetadataLoadMode::ReadIntoMemory &&
+      options.metadata_load_mode != MetadataLoadMode::MmapPrivate) {
+    throw std::invalid_argument("invalid OSR metadata mode");
+  }
+  return std::make_unique<Router>(path, options);
+}
+
+std::shared_ptr<Router> open_shared_router_with_options(
+    rust::Str path, RouterOpenOptions const& options) {
+  if (options.metadata_load_mode != MetadataLoadMode::ReadIntoMemory &&
+      options.metadata_load_mode != MetadataLoadMode::MmapPrivate) {
+    throw std::invalid_argument("invalid OSR metadata mode");
+  }
+  return std::make_shared<Router>(path, options);
 }
 
 std::uint64_t Router::node_count() const noexcept {
