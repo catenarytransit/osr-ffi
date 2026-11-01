@@ -185,8 +185,14 @@ pub mod ffi {
         /// One native graph object can be cloned as a SharedPtr and queried
         /// concurrently. Matches and search state remain call-local.
         fn open_shared_router(data_dir: &str) -> Result<SharedPtr<Router>>;
-        fn open_router_with_options(data_dir: &str, options: &RouterOpenOptions) -> Result<UniquePtr<Router>>;
-        fn open_shared_router_with_options(data_dir: &str, options: &RouterOpenOptions) -> Result<SharedPtr<Router>>;
+        fn open_router_with_options(
+            data_dir: &str,
+            options: &RouterOpenOptions,
+        ) -> Result<UniquePtr<Router>>;
+        fn open_shared_router_with_options(
+            data_dir: &str,
+            options: &RouterOpenOptions,
+        ) -> Result<SharedPtr<Router>>;
         fn metadata_load_mode(self: &Router) -> MetadataLoadMode;
         fn node_count(self: &Router) -> u64;
         fn way_count(self: &Router) -> u64;
@@ -320,7 +326,9 @@ pub mod ffi {
 
 impl Default for ffi::RouterOpenOptions {
     fn default() -> Self {
-        Self { metadata_load_mode: ffi::MetadataLoadMode::ReadIntoMemory }
+        Self {
+            metadata_load_mode: ffi::MetadataLoadMode::ReadIntoMemory,
+        }
     }
 }
 
@@ -468,8 +476,10 @@ mod tests {
 
     #[test]
     fn metadata_mode_defaults_to_read() {
-        assert_eq!(ffi::RouterOpenOptions::default().metadata_load_mode,
-                   ffi::MetadataLoadMode::ReadIntoMemory);
+        assert_eq!(
+            ffi::RouterOpenOptions::default().metadata_load_mode,
+            ffi::MetadataLoadMode::ReadIntoMemory
+        );
     }
 
     #[test]

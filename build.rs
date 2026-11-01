@@ -72,27 +72,87 @@ fn exclude_backend_dependencies(source: &Path) {
     }
 }
 
-
 fn replace_staged(root: &Path, path: &str, from: &str, to: &str) {
     let file = root.join(path);
     let old = fs::read_to_string(&file).expect("staged OSR source");
-    if old.contains(to) { return; }
-    assert_eq!(old.matches(from).count(), 1, "OSR patch anchor not found: {}", path);
+    if old.contains(to) {
+        return;
+    }
+    assert_eq!(
+        old.matches(from).count(),
+        1,
+        "OSR patch anchor not found: {}",
+        path
+    );
     fs::write(file, old.replacen(from, to, 1)).expect("write staged OSR patch");
 }
 
 fn patch_osr_loading(root: &Path) {
-    replace_staged(root, "include/osr/ways.h", "ways(std::filesystem::path, cista::mmap::protection);", "ways(std::filesystem::path, cista::mmap::protection, bool = false);");
-    replace_staged(root, "include/osr/ways.h", "static cista::wrapped<routing> read(std::filesystem::path const&);", "static cista::wrapped<routing> read(std::filesystem::path const&, bool = false);");
-    replace_staged(root, "src/ways.cc", "#include \"osr/ways.h\"", "#include \"osr/ways.h\"\n#include \"osr/ffi_metadata_loading.h\"");
-    replace_staged(root, "src/ways.cc", "ways::ways(std::filesystem::path p, cista::mmap::protection const mode)", "ways::ways(std::filesystem::path p, cista::mmap::protection const mode, bool const mmap_meta)");
-    replace_staged(root, "src/ways.cc", "? routing::read(p_)", "? routing::read(p_, mmap_meta)");
-    replace_staged(root, "src/ways.cc", "std::filesystem::path const& p) {\n  return cista::read<ways::routing>(p / \"routing.bin\");", "std::filesystem::path const& p, bool const mmap_meta) {\n  return mmap_meta ? ffi_metadata_loading::read_private<ways::routing>(p / \"routing.bin\") : cista::read<ways::routing>(p / \"routing.bin\");");
-    replace_staged(root, "include/osr/lookup.h", "lookup(ways const&, std::filesystem::path, cista::mmap::protection);", "lookup(ways const&, std::filesystem::path, cista::mmap::protection, bool = false);");
-    replace_staged(root, "src/lookup.cc", "#include \"osr/lookup.h\"", "#include \"osr/lookup.h\"\n#include \"osr/ffi_metadata_loading.h\"");
-    replace_staged(root, "src/lookup.cc", "cista::mmap::protection mode)\n    : p_{std::move(p)},", "cista::mmap::protection mode, bool const mmap_meta)\n    : p_{std::move(p)},");
-    replace_staged(root, "src/lookup.cc", "? *cista::read<cista::mm_rtree<way_idx_t>::meta>(\n                       p_ / \"rtree_meta.bin\")", "? (mmap_meta ? ffi_metadata_loading::read_value<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\") : *cista::read<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\"))");
-    fs::write(root.join("include/osr/ffi_metadata_loading.h"), include_str!("patches/ffi_metadata_loading.h")).expect("staged OSR mapper");
+    replace_staged(
+        root,
+        "include/osr/ways.h",
+        "ways(std::filesystem::path, cista::mmap::protection);",
+        "ways(std::filesystem::path, cista::mmap::protection, bool = false);",
+    );
+    replace_staged(
+        root,
+        "include/osr/ways.h",
+        "static cista::wrapped<routing> read(std::filesystem::path const&);",
+        "static cista::wrapped<routing> read(std::filesystem::path const&, bool = false);",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "#include \"osr/ways.h\"",
+        "#include \"osr/ways.h\"\n#include \"osr/ffi_metadata_loading.h\"",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "ways::ways(std::filesystem::path p, cista::mmap::protection const mode)",
+        "ways::ways(std::filesystem::path p, cista::mmap::protection const mode, bool const mmap_meta)",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "? routing::read(p_)",
+        "? routing::read(p_, mmap_meta)",
+    );
+    replace_staged(
+        root,
+        "src/ways.cc",
+        "std::filesystem::path const& p) {\n  return cista::read<ways::routing>(p / \"routing.bin\");",
+        "std::filesystem::path const& p, bool const mmap_meta) {\n  return mmap_meta ? ffi_metadata_loading::read_private<ways::routing>(p / \"routing.bin\") : cista::read<ways::routing>(p / \"routing.bin\");",
+    );
+    replace_staged(
+        root,
+        "include/osr/lookup.h",
+        "lookup(ways const&, std::filesystem::path, cista::mmap::protection);",
+        "lookup(ways const&, std::filesystem::path, cista::mmap::protection, bool = false);",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "#include \"osr/lookup.h\"",
+        "#include \"osr/lookup.h\"\n#include \"osr/ffi_metadata_loading.h\"",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "cista::mmap::protection mode)\n    : p_{std::move(p)},",
+        "cista::mmap::protection mode, bool const mmap_meta)\n    : p_{std::move(p)},",
+    );
+    replace_staged(
+        root,
+        "src/lookup.cc",
+        "? *cista::read<cista::mm_rtree<way_idx_t>::meta>(\n                       p_ / \"rtree_meta.bin\")",
+        "? (mmap_meta ? ffi_metadata_loading::read_value<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\") : *cista::read<cista::mm_rtree<way_idx_t>::meta>(p_ / \"rtree_meta.bin\"))",
+    );
+    fs::write(
+        root.join("include/osr/ffi_metadata_loading.h"),
+        include_str!("patches/ffi_metadata_loading.h"),
+    )
+    .expect("staged OSR mapper");
 }
 
 fn resolve_source(out: &Path) -> PathBuf {
