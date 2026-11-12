@@ -110,17 +110,10 @@ jobs:
           set -euo pipefail
           bridge="$(find target/debug/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
           out_dir="${bridge%/native-lib/libcatenary_osr_bridge.so}"
-          python3 - <<'PY'
-          from pathlib import Path
-          Path('/tmp/osr-residency.osm').write_text('''<osm version="0.6">
-          <node id="1" lat="48.0" lon="7.85" version="1"/>
-          <node id="2" lat="48.001" lon="7.85" version="1"><tag k="railway" v="platform"/><tag k="name" v="Test platform"/></node>
-          <node id="3" lat="48.002" lon="7.85" version="1"/>
-          <way id="10" version="1"><nd ref="1"/><nd ref="2"/><nd ref="3"/>
-          <tag k="highway" v="residential"/></way></osm>''')
-          PY
-          "$out_dir/build/osr-extract" -p -i /tmp/osr-residency.osm -o /tmp/osr-residency-graph
-          OSR_TEST_DATA_DIR=/tmp/osr-residency-graph OSR_TEST_LATITUDE=48.001 OSR_TEST_LONGITUDE=7.85 \
+          # Reuse the small station fixture from the exact pinned OSR source.
+          "$out_dir/build/osr-extract" --with_platforms=true \
+            -i "$out_dir/osr-source/test/da_hbf_2.osm.pbf" -o /tmp/osr-residency-graph
+          OSR_TEST_DATA_DIR=/tmp/osr-residency-graph OSR_TEST_LATITUDE=49.8726829 OSR_TEST_LONGITUDE=8.63148 \
             cargo test --test shared_router -- --nocapture
       - name: Standalone downstream executable without LD_LIBRARY_PATH
         run: |
