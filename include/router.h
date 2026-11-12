@@ -15,7 +15,9 @@ struct RawWayCandidate;
 struct RawMatchResult;
 struct MatchOptions;
 struct RouterOpenOptions;
+struct ResidencyAdviceReport;
 enum class MetadataLoadMode : std::uint8_t;
+enum class ResidencyAdvice : std::uint8_t;
 class Router;
 
 // Complete C++ type required by cxx for UniquePtr<MatchStore>.
@@ -39,6 +41,7 @@ public:
   Router(rust::Str, RouterOpenOptions const&);
   ~Router();
   MetadataLoadMode metadata_load_mode() const noexcept;
+  ResidencyAdviceReport advise_residency(ResidencyAdvice) const;
   Router(Router const&) = delete;
   Router& operator=(Router const&) = delete;
 

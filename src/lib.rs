@@ -175,6 +175,24 @@ pub mod ffi {
         pub metadata_load_mode: MetadataLoadMode,
     }
 
+    /// Linux best-effort reclamation advice; neither operation discards contents.
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ResidencyAdvice {
+        Cold = 0,
+        PageOut = 1,
+    }
+
+    /// Successful advice is not a measurement of reclaimed/resident bytes.
+    #[derive(Debug, Clone, Copy)]
+    pub struct ResidencyAdviceReport {
+        pub advised_mappings: u64,
+        pub advised_bytes: u64,
+        pub failed_mappings: u64,
+        /// First native errno, or zero if every nonempty mapping succeeded.
+        pub first_errno: i32,
+    }
+
     unsafe extern "C++" {
         include!("include/router.h");
 
@@ -194,6 +212,14 @@ pub mod ffi {
             options: &RouterOpenOptions,
         ) -> Result<SharedPtr<Router>>;
         fn metadata_load_mode(self: &Router) -> MetadataLoadMode;
+        /// Advise owned file mappings only, never heap metadata or search state.
+        /// Call once after initialization, before serving queries. Errors are
+        /// counted per mapping so later mappings are still attempted. Non-Linux
+        /// systems report ENOTSUP for each nonempty mapping.
+        fn advise_residency(
+            self: &Router,
+            advice: ResidencyAdvice,
+        ) -> Result<ResidencyAdviceReport>;
         fn node_count(self: &Router) -> u64;
         fn way_count(self: &Router) -> u64;
         fn has_elevations(self: &Router) -> bool;

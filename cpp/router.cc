@@ -1,4 +1,5 @@
 #include "include/router.h"
+#include "cpp/residency.h"
 #include "osr-ffi/src/lib.rs.h"
 
 #include <algorithm>
@@ -214,6 +215,62 @@ Router::~Router() = default;
 
 MetadataLoadMode Router::metadata_load_mode() const noexcept {
   return impl_->load_mode_;
+}
+
+ResidencyAdviceReport Router::advise_residency(ResidencyAdvice advice) const {
+  if (advice != ResidencyAdvice::Cold && advice != ResidencyAdvice::PageOut) {
+    throw std::invalid_argument("invalid OSR residency advice");
+  }
+  auto report = ResidencyAdviceReport{};
+  auto const apply = [&](cista::mmap const& mapping) {
+    if (mapping.size() == 0U) return;
+    auto const error = detail::advise_mapping(
+        mapping.data(), mapping.size(), advice == ResidencyAdvice::PageOut);
+    if (error != 0) {
+      ++report.failed_mappings;
+      if (report.first_errno == 0) report.first_errno = error;
+    } else {
+      ++report.advised_mappings;
+      report.advised_bytes += mapping.size();
+    }
+  };
+  auto const vector = [&](auto const& v) { apply(v.mmap_); };
+  auto const vecvec = [&](auto const& v) {
+    vector(v.data_);
+    vector(v.bucket_starts_);
+  };
+
+  // Inspect the actual owner: a heap-backed read must never be passed to
+  // madvise, even if its address happens to be page aligned.
+  auto const& w = impl_->ways_;
+  if (auto const* owner = std::get_if<cista::buf<cista::mmap>>(&w.r_.mem_)) {
+    apply(owner->buf_);
+  }
+  vector(w.node_to_osm_);
+  vector(w.way_osm_idx_);
+  vecvec(w.way_polylines_);
+  vecvec(w.way_osm_nodes_);
+  vecvec(w.strings_);
+  vector(w.way_names_);
+  vector(w.way_has_conditional_access_no_.blocks_);
+  vector(w.way_conditional_access_no_);
+  apply(impl_->lookup_.ffi_rtree_mapping());
+  if (impl_->elevations_) {
+    vecvec(impl_->elevations_->elevations_);
+  }
+  if (impl_->platforms_) {
+    auto const& p = *impl_->platforms_;
+    vector(p.node_pos_);
+    vector(p.node_is_platform_.blocks_);
+    vector(p.way_is_platform_.blocks_);
+    vector(p.platform_ref_.paged_.data_);
+    vector(p.platform_ref_.idx_);
+    vector(p.platform_names_.data_);
+    for (auto const& index : p.platform_names_.index_) vector(index);
+  }
+  // rtree_meta.bin is copied from a temporary mapping during open; platform
+  // R-tree nodes and other heap allocations are intentionally left alone.
+  return report;
 }
 
 std::unique_ptr<Router> open_router(rust::Str path) {

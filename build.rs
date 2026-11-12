@@ -138,6 +138,12 @@ fn patch_osr_loading(root: &Path) {
     );
     replace_staged(
         root,
+        "include/osr/lookup.h",
+        "private:",
+        "public:\n  cista::mmap const& ffi_rtree_mapping() const { return rtree_.nodes_.mmap_; }\n\nprivate:",
+    );
+    replace_staged(
+        root,
         "src/lookup.cc",
         "cista::mmap::protection mode)\n    : p_{std::move(p)},",
         "cista::mmap::protection mode, bool const mmap_meta)\n    : p_{std::move(p)},",
@@ -293,6 +299,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=include/router.h");
     println!("cargo:rerun-if-changed=cpp/router.cc");
+    println!("cargo:rerun-if-changed=cpp/residency.h");
+    println!("cargo:rerun-if-changed=patches/ffi_metadata_loading.h");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=OSR_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=OSR_GIT_URL");

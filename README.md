@@ -255,3 +255,30 @@ files on disk. `routing.bin` retains its mapping for the router lifetime;
 `rtree_meta.bin` is copied by value from its temporary mapping.
 All other existing read-only OSR mmap files remain unchanged.
 The pinned OSR and cista sources are adapted by `build.rs` inside `OUT_DIR`.
+
+### Release startup mapping residency (Linux 5.4+)
+
+After initialization and graph checks, before serving queries:
+
+```rust
+let report = router.advise_residency(ffi::ResidencyAdvice::PageOut)?;
+// Or ResidencyAdvice::Cold to make pages preferred reclaim candidates.
+if report.failed_mappings != 0 {
+    eprintln!("{} advice failures; first errno {}",
+              report.failed_mappings, report.first_errno);
+}
+```
+
+The method visits actual owned file mappings: mmap-backed `routing.bin`,
+way/node/geometry/name arrays, the lookup R-tree, and optional platform and
+elevation files. Heap-backed metadata and the platform R-tree are skipped.
+`rtree_meta.bin` has no retained mapping after open. No graph files or extraction
+format change. Private pointer relocations survive both operations; neither
+operation uses `MADV_DONTNEED`.
+
+Advice is best effort, not an RSS cap. `advised_bytes` counts the ranges whose
+syscalls succeeded, not bytes actually evicted. Errors are counted per mapping
+and do not prevent attempts on remaining mappings. Non-Linux platforms report
+`ENOTSUP`; older Linux kernels may return `EINVAL`. Applications should log
+these errors and continue. Subsequent queries can fault pages back in, with
+additional I/O and latency. Call once after startup rather than per request.
