@@ -44,6 +44,10 @@ jobs:
           "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
       - name: Native build and Rust tests
         run: cargo test --verbose
+      - name: Verify reclamation preserves private pointer changes
+        run: |
+          "$CXX" -std=c++23 -Wall -Wextra -Werror -I. tests/residency.cc -o /tmp/osr-residency-test
+          /tmp/osr-residency-test
       - name: Verify shared OSR dependencies and deferred CXX symbols
         shell: bash
         run: |
@@ -100,6 +104,24 @@ jobs:
           ldd "$extractor" | tee /tmp/osr-extract-ldd.txt
           grep -F 'libtbb.so' /tmp/osr-extract-ldd.txt
           if grep -F 'not found' /tmp/osr-extract-ldd.txt; then exit 1; fi
+      - name: Routing parity after cold and pageout advice
+        shell: bash
+        run: |
+          set -euo pipefail
+          bridge="$(find target/debug/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          out_dir="${bridge%/native-lib/libcatenary_osr_bridge.so}"
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('/tmp/osr-residency.osm').write_text('''<osm version="0.6">
+          <node id="1" lat="48.0" lon="7.85" version="1"/>
+          <node id="2" lat="48.001" lon="7.85" version="1"><tag k="railway" v="platform"/><tag k="name" v="Test platform"/></node>
+          <node id="3" lat="48.002" lon="7.85" version="1"/>
+          <way id="10" version="1"><nd ref="1"/><nd ref="2"/><nd ref="3"/>
+          <tag k="highway" v="residential"/></way></osm>''')
+          PY
+          "$out_dir/build/osr-extract" -p -i /tmp/osr-residency.osm -o /tmp/osr-residency-graph
+          OSR_TEST_DATA_DIR=/tmp/osr-residency-graph OSR_TEST_LATITUDE=48.001 OSR_TEST_LONGITUDE=7.85 \
+            cargo test --test shared_router -- --nocapture
       - name: Standalone downstream executable without LD_LIBRARY_PATH
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path tests/downstream-consumer/Cargo.toml --verbose

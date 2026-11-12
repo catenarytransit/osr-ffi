@@ -5,6 +5,66 @@ use osr_ffi::{Profile, ffi};
 use std::sync::Arc;
 
 #[test]
+#[cfg(target_os = "linux")]
+fn residency_advice_preserves_routing() {
+    use ffi::{MetadataLoadMode, ResidencyAdvice, RouterOpenOptions};
+    let Ok(data_dir) = std::env::var("OSR_TEST_DATA_DIR") else {
+        eprintln!("skipping residency parity: set OSR_TEST_DATA_DIR");
+        return;
+    };
+    let point = std::env::var("OSR_TEST_LATITUDE")
+        .ok()
+        .zip(std::env::var("OSR_TEST_LONGITUDE").ok())
+        .map(|(lat, lon)| ffi::Coordinate::outdoor(lat.parse().unwrap(), lon.parse().unwrap()));
+    let mut mapping_counts = Vec::new();
+    for mode in [
+        MetadataLoadMode::ReadIntoMemory,
+        MetadataLoadMode::MmapPrivate,
+    ] {
+        let graph = ffi::open_shared_router_with_options(
+            &data_dir,
+            &RouterOpenOptions {
+                metadata_load_mode: mode,
+            },
+        )
+        .unwrap();
+        let graph = graph.as_ref().unwrap();
+        let snapshot = || {
+            let point = point.as_ref()?;
+            let matched = graph.get_raw_match(point, 100.0).unwrap();
+            assert!(!matched.is_empty(), "fixture coordinate must match a way");
+            let opts = ffi::RoutingOptions {
+                max_cost: 1200,
+                include_segments: true,
+                ..ffi::RoutingOptions::default().profile(Profile::Foot)
+            };
+            let routes = graph
+                .one_to_many(point, std::slice::from_ref(point), &opts, &[])
+                .unwrap();
+            assert!(routes[0].found, "fixture route must be reachable");
+            Some(format!("{matched:?} {routes:?}"))
+        };
+        let before = snapshot();
+        let nodes = graph.node_count();
+        let ways = graph.way_count();
+        for advice in [ResidencyAdvice::Cold, ResidencyAdvice::PageOut] {
+            let report = graph.advise_residency(advice).unwrap();
+            assert_eq!(report.failed_mappings, 0, "{report:?}");
+            assert!(report.advised_mappings > 0);
+            assert!(report.advised_bytes > 0);
+            assert_eq!(graph.node_count(), nodes);
+            assert_eq!(graph.way_count(), ways);
+            assert_eq!(snapshot(), before);
+            if advice == ResidencyAdvice::Cold {
+                mapping_counts.push(report.advised_mappings);
+            }
+        }
+    }
+    // The heap reader's routing.bin must not be advised as if it were a map.
+    assert_eq!(mapping_counts[1], mapping_counts[0] + 1);
+}
+
+#[test]
 fn concurrent_shared_graph_queries() {
     let Ok(data_dir) = std::env::var("OSR_TEST_DATA_DIR") else {
         eprintln!("skipping: set OSR_TEST_DATA_DIR to a built OSR graph");
